@@ -2,13 +2,15 @@
 
 A visual snake battle game where two LLMs compete against each other! 
 
+**[▶️ try it live!](https://sujee.github.io/llm-snake-arena/snake.html)**
+
 ## History
 
 LLM Snake Arena originated as a demo created by Sujee Maniyam for the [Nebius Token Factory Cookbook](https://github.com/nebius/token-factory-cookbook). This is an independent version.
 
 The original version can be accessed 
 - at the [token factory cookbook](https://github.com/nebius/token-factory-cookbook/tree/main/fun/snake-game)
-- or via tag [v1.0.0-token-factory-cookbook](#) i this repo
+- or via tag [v1.0.0-token-factory-cookbook](https://github.com/sujee/llm-snake-arena/tree/v1.0.0-token-factory-cookbook) in this repo
 
 
 ## Features
@@ -51,7 +53,23 @@ The original version can be accessed
 
 Controls in the left pane: **Start**, **Pause** ⏸️, **Restart** 🔄, and a **Loop** toggle. The **🔧 Extra** section has the **Speed Test** benchmark and sort buttons.
 
+## Troubleshoot
 
+If opening a file in a browser gives you access errors, run a tiny web server like this
+
+```bash
+python -m http.server
+```
+
+Go to : http://localhost:8000/snake.html
+
+
+## Tech Stack
+
+- Pure HTML/CSS/JavaScript (no build tools required)
+- Canvas API for game rendering
+- OpenAI-compatible API for LLM calls
+- Responsive design (stacks vertically on narrow screens)
 
 ## Game Rules
 
@@ -78,23 +96,6 @@ Controls in the left pane: **Start**, **Pause** ⏸️, **Restart** 🔄, and a 
 - **Winner**: The snake that survives longer. If both crash in the same turn, the longer snake wins (draw if equal length).
 
 **Tip**: Wall wrapping creates interesting strategies - you might wrap around the board quickly to reach a far-away fruit or trap your opponent!
-
-## Tech Stack
-
-- Pure HTML/CSS/JavaScript (no build tools required)
-- Canvas API for game rendering
-- OpenAI-compatible API for LLM calls
-- Responsive design (stacks vertically on narrow screens)
-
-## File Structure
-
-```
-├── snake.html      # Main HTML structure
-├── style.css       # Styling and animations
-├── game.js         # Game logic, rendering, and API integration
-├── benchmark.js    # Model performance testing system
-└── README.md       # This file
-```
 
 ## Customization
 
@@ -129,7 +130,6 @@ Tested with Nebius Token Factory but should work with others (OpenAI, compatible
 ## Troubleshooting
 
 **"Failed to load models" error:**
-- Check your API URL ends with `/`
 - Verify your API key is correct
 - Check browser console (F12) for detailed errors
 - Some APIs require CORS to be configured to work from the browser

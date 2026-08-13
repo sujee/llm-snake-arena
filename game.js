@@ -2799,7 +2799,6 @@ async function moveSnakeWithLLM(playerNum, abortSignal, timeoutAttempt = 0) {
 
     // Race the API call against a timeout
     let result;
-    let timedOut = false;
 
     // Capture the race timer so we can clear it on success (otherwise every
     // successful move would leave a 30s timer pending — a slow leak over a
@@ -2814,7 +2813,6 @@ async function moveSnakeWithLLM(playerNum, abortSignal, timeoutAttempt = 0) {
                     if (gameState.debugMode) {
                         console.log(`[${formatTimestamp(new Date())}] ⚠️ P${playerNum}: Move timeout (${LLM_TIMEOUT_MS}ms)`);
                     }
-                    timedOut = true;
                     reject(new Error('Timeout'));
                 }, LLM_TIMEOUT_MS);
                 activeTimeouts.add(outerTimeoutId);
@@ -2856,13 +2854,13 @@ async function moveSnakeWithLLM(playerNum, abortSignal, timeoutAttempt = 0) {
             const globalStats = calculateLatencyStats(globalLatencies);
             updateLatencyStatsDisplay(playerNum, globalStats);
 
-            // Hard cap: give up after MAX_TIMEOUT_RETRIES consecutive move
-            // timeouts instead of looping forever (the playerForfeited event is
+            // Hard cap: give up after MAX_TIMEOUT_RETRIES consecutive move-timeout
+            // retries instead of looping forever (the playerForfeited event is
             // only handled by an external demo harness, so in normal play there
             // is otherwise no terminator for persistent timeouts).
             if (timeoutAttempt + 1 > MAX_TIMEOUT_RETRIES) {
                 const modelName = (playerNum === 1 ? gameState.player1Model : gameState.player2Model).split('/').pop();
-                addLog(`❌ ${playerNum === 1 ? 'Red' : 'Blue'} (${modelName}) timed out ${MAX_TIMEOUT_RETRIES}x — forfeits.`, playerNum);
+                addLog(`❌ ${playerNum === 1 ? 'Red' : 'Blue'} (${modelName}) timed out ${timeoutAttempt + 1}x — forfeits.`, playerNum);
                 // Mark this player dead so checkGameOver declares the opponent
                 // the winner, logs the banner, and disables pause. (Mirrors the
                 // collision-death path in moveSingleSnake.)

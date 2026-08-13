@@ -66,7 +66,7 @@ This is a snake battle game with AI-controlled opponents powered by LLM APIs. Th
 5. Ensure all critical bugs are fixed before adding new features
 
 ## Critical Files
-- `snake-1.html`: Main UI structure (maintain careful balance of div tags)
+- `snake.html`: Main UI structure (maintain careful balance of div tags)
 - `style.css`: Layout and styling (preserve flex layouts and panel dimensions)
 - `game.js`: Game logic and performance optimizations
 - `benchmark.js`: Model performance testing
