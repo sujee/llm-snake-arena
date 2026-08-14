@@ -31,47 +31,30 @@ const LLM_FULL_GRID_VIEW = false;
 let VIEW_RADIUS = 10; // Initialized to 10 as requested, can be changed from UI
 // If true, provides a list of safe moves in the prompt (helps LLM avoid collisions)
 let collisionAvoidanceEnabled = true;
+// If true, the prompt includes the FRUITS list (coordinates / value / distance)
+// — raw hints only, no target recommendation; the LLM picks its own fruit. When
+// false the model must spot fruit emojis on the board view itself — most LLMs
+// are too weak at 2D grid reasoning for that (they drift in straight lines), so
+// this is effectively always ON. Code-level toggle (formerly an Options UI
+// checkbox, removed since the off state isn't viable gameplay).
+const fruitGuidanceEnabled = true;
+// If true, each fruit in the prompt also gets its wrap-aware Distance and
+// compass-bearing hint (e.g. "Distance: 3 (3 right)"). When false, the list
+// carries only emoji + coordinates + value — the model must do the
+// coordinates→direction/distance arithmetic itself (most small models can't).
+// Controlled by the Options UI toggle "🧭 Provide Hints".
+let provideHintsEnabled = true;
 // If true, lets the model "think"/reason before answering (chat_template_kwargs.enable_thinking)
 let thinkingModeEnabled = false;
 
 // LLM System Prompt
-//
-// --- ORIGINAL SYSTEM PROMPT (backup) ---
-// const SYSTEM_PROMPT1 = `You are a snake game AI with LIMITED VISIBILITY. Your goal: SURVIVE longer than your opponent while strategically eating fruits to grow. Respond INSTANTLY with ONLY ONE WORD: up, down, left, or right. NO thinking, NO explanation, NO extra text.
-//
-// VISIBILITY LIMITATIONS:
-// - You can only see a {VISIBILITY_SIZE}x{VISIBILITY_SIZE} area centered on your head
-// - Beyond this view, you cannot see snakes, fruits, or obstacles
-// - Walls are SAFE - you wrap through to the other side, BUT the destination must be clear within your view
-// - Visibility radius can be adjusted by the game operator
-//
-// CRITICAL SURVIVAL RULES:
-// - NEVER move into YOUR OWN BODY or into ENEMY SNAKE - instant death
-// - Walls are SAFE - you wrap through to the other side, BUT check the destination
-// - Prioritize SURVIVAL over fruit, BUT seek fruit when safe to gain length advantage
-//
-// STRATEGIC FRUIT SEEKING:
-// - Target HIGH-VALUE fruits (⭐💎🦋🎁) for maximum growth advantage
-// - Consider distance vs value - sometimes a distant high-value fruit is worth pursuing
-// - Compare your length to enemy's - seek fruits to maintain or gain length advantage
-// - When equally safe, prefer moves toward the CLOSEST HIGH-VALUE fruit within your view
-// - Sometimes the shortest path to a fruit is by wrapping through a wall.
-//
-// SPATIAL AWARENESS:
-// - Look at your body and visible enemy snake positions - create mental map of occupied spaces
-// - Find large empty areas to move into - avoid tight spaces alongside your body
-// - If your body is blocking one direction, move AWAY from it
-// - The safest moves are into open space, not alongside or toward your body
-// - When approaching the edge of your vision, consider exploring to expand your knowledge of the board
-// `;
-// --- END ORIGINAL SYSTEM PROMPT ---
-//
 const SYSTEM_PROMPT1 = `You are a snake game AI with LIMITED VISIBILITY. Goal: SURVIVE longer than your opponent while eating fruits to grow. Respond with ONLY ONE WORD: up, down, left, or right. No thinking, no explanation, no extra text.
 
 - VISIBILITY: you see a {VISIBILITY_SIZE}x{VISIBILITY_SIZE} area centered on your head; beyond it is unknown.
 - WALLS: safe - you wrap through to the other side, but the destination must be clear.
 - SURVIVAL: never move into YOUR OWN BODY or the ENEMY SNAKE (instant death). Prioritize survival over fruit.
-- FRUIT: when safe, prefer HIGH-VALUE fruits (⭐💎🦋🎁); the board lists each fruit's value, distance, and a strategic direction hint.
+- FRUIT: when safe, prefer HIGH-VALUE fruits (⭐💎🦋🎁). Fruits are drawn on the board as their own emoji and listed with value{HINTS_DESC}. Pick a target and commit to it — don't keep switching goals; oscillating wastes moves.
+- DIRECTION: your current direction is reported each turn; you cannot reverse into your own neck, so at most 3 moves are ever really available.
 - SPACE: favor moves into open space; avoid tight spots alongside your body. When your body blocks a direction, move away from it.
 `;
 
@@ -157,6 +140,7 @@ const pauseBtn = document.getElementById('pause-btn');
 const restartBtn = document.getElementById('restart-btn');
 const debugCheckbox = document.getElementById('debug-checkbox');
 const collisionAvoidanceCheckbox = document.getElementById('collision-avoidance-checkbox');
+const provideHintsCheckbox = document.getElementById('provide-hints-checkbox');
 const thinkingModeCheckbox = document.getElementById('thinking-mode-checkbox');
 const loopCheckbox = document.getElementById('loop-checkbox');
 const viewRadiusInput = document.getElementById('view-radius-input');
@@ -332,6 +316,10 @@ if (debugCheckbox) {
 
 if (collisionAvoidanceCheckbox) {
     addTrackedEventListener(collisionAvoidanceCheckbox, 'change', toggleCollisionAvoidance);
+}
+
+if (provideHintsCheckbox) {
+    addTrackedEventListener(provideHintsCheckbox, 'change', toggleProvideHints);
 }
 
 if (thinkingModeCheckbox) {
@@ -1354,6 +1342,27 @@ function toroidalDist(ax, ay, bx, by) {
     return Math.min(dx, GRID_SIZE - dx) + Math.min(dy, GRID_SIZE - dy);
 }
 
+// Wrap-aware compass hint from head to target (toroidal shortest path per axis),
+// e.g. " (3 right)" or " (8 right, 1 down)" — dominant axis first. Factual
+// navigation info, not a target recommendation: small LLMs fail the
+// coordinates→direction mapping (especially across the wrap) and wander without it.
+function wrapBearing(head, target) {
+    const parts = [];
+    for (const [raw, neg, pos] of [
+        [target.x - head.x, 'left', 'right'],
+        [target.y - head.y, 'up', 'down'],
+    ]) {
+        const abs = Math.abs(raw);
+        if (abs === 0) continue;
+        const mag = Math.min(abs, GRID_SIZE - abs);
+        // Direct way shorter → follow raw's sign; wrap way shorter → flip it.
+        const dirName = (abs <= GRID_SIZE - abs ? raw > 0 : raw < 0) ? pos : neg;
+        parts.push({ mag, label: `${mag} ${dirName}` });
+    }
+    parts.sort((a, b) => b.mag - a.mag);
+    return parts.length ? ` (${parts.map(p => p.label).join(', ')})` : '';
+}
+
 // Get game board state as text for LLM
 function getBoardState(playerNum) {
     const snake = playerNum === 1 ? gameState.snake1 : gameState.snake2;
@@ -1364,16 +1373,11 @@ function getBoardState(playerNum) {
     const head = snake[0];
     const enemyHead = enemySnake[0];
 
-    // Find closest fruit
-    let closestFruit = null;
-    let closestDist = Infinity;
-    gameState.fruits.forEach(fruit => {
-        const dist = toroidalDist(head.x, head.y, fruit.x, fruit.y);
-        if (dist < closestDist) {
-            closestDist = dist;
-            closestFruit = fruit;
-        }
-    });
+    // Current direction, resolved once: used in the prompt header and again to
+    // filter the forbidden reverse move out of the safe-moves list below.
+    const currentDir = playerNum === 1 ? gameState.direction1 : gameState.direction2;
+    const DIR_NAMES = { '0,-1': 'up', '0,1': 'down', '-1,0': 'left', '1,0': 'right' };
+    const currentDirName = currentDir ? DIR_NAMES[`${currentDir.x},${currentDir.y}`] : 'unknown';
 
     const distToEnemy = toroidalDist(head.x, head.y, enemyHead.x, enemyHead.y);
 
@@ -1387,11 +1391,12 @@ function getBoardState(playerNum) {
         for (let y = 0; y < GRID_SIZE; y++) {
             let row = "";
             for (let x = 0; x < GRID_SIZE; x++) {
+                const fruitHere = gameState.fruits.find(f => f.x === x && f.y === y);
                 // Check what's at this position
                 if (head.x === x && head.y === y) {
                     row += "@ "; // Your head
-                } else if (gameState.fruits.some(f => f.x === x && f.y === y)) {
-                    row += "★ "; // Fruit
+                } else if (fruitHere) {
+                    row += fruitHere.type.emoji + ' '; // Fruit (real emoji for instant value recognition)
                 } else if (enemyHead.x === x && enemyHead.y === y) {
                     row += playerNum === 1 ? "B " : "R "; // Enemy head
                 } else if (snake.some(seg => seg.x === x && seg.y === y)) {
@@ -1414,11 +1419,12 @@ function getBoardState(playerNum) {
                 const x = ((head.x + dx) % GRID_SIZE + GRID_SIZE) % GRID_SIZE;
                 const y = ((head.y + dy) % GRID_SIZE + GRID_SIZE) % GRID_SIZE;
 
+                const fruitHere = gameState.fruits.find(f => f.x === x && f.y === y);
                 // Check what's at this position
                 if (dx === 0 && dy === 0) {
                     row += "@ "; // Your head
-                } else if (gameState.fruits.some(f => f.x === x && f.y === y)) {
-                    row += "★ "; // Fruit
+                } else if (fruitHere) {
+                    row += fruitHere.type.emoji + ' '; // Fruit (real emoji for instant value recognition)
                 } else if (x === enemyHead.x && y === enemyHead.y) {
                     row += playerNum === 1 ? "B " : "R "; // Enemy head
                 } else if (snake.some(seg => seg.x === x && seg.y === y)) {
@@ -1435,61 +1441,36 @@ function getBoardState(playerNum) {
 
     let state = `You are Player ${playerNum} (snake ${myColor}) playing against ${enemyColor}\n`;
     state += `Grid size: ${GRID_SIZE}x${GRID_SIZE}\n`;
+    state += `Coordinates: (0,0) is top-left. x increases to the RIGHT, y increases DOWNWARD.\n`;
     state += `Your length: ${snake.length} | Enemy length: ${enemySnake.length}\n`;
     state += `Your head at: (${head.x}, ${head.y})\n`;
-    state += `Enemy head at: (${enemyHead.x}, ${enemyHead.y})\n\n`;
+    state += `Enemy head at: (${enemyHead.x}, ${enemyHead.y})\n`;
+    state += `Your current direction: ${currentDirName}\n\n`;
 
-    // --- ORIGINAL FRUIT LIST / HIGH-VALUE TARGETS BLOCK (backup) ---
-    // state += `FRUITS (${gameState.fruits.length} available):\n`;
-    // gameState.fruits.forEach((fruit, i) => {
-    //     const dist = toroidalDist(head.x, head.y, fruit.x, fruit.y);
-    //     const valueRatio = fruit.type.value / Math.max(dist, 1); // Value per distance unit
-    //     state += `${i + 1}. ${fruit.type.emoji} at (${fruit.x}, ${fruit.y}) - Value: ${fruit.type.value} - Distance: ${dist} - Value/Distance: ${valueRatio.toFixed(2)}\n`;
-    // });
-    // state += `\n`;
-    //
-    // const highValueFruits = gameState.fruits.filter(fruit => fruit.type.value > 1);
-    // if (highValueFruits.length > 0) {
-    //     state += `HIGH-VALUE TARGETS (${highValueFruits.length} rare fruits):\n`;
-    //     highValueFruits.forEach((fruit, i) => {
-    //         const dist = toroidalDist(head.x, head.y, fruit.x, fruit.y);
-    //         state += `- ${fruit.type.emoji} ${fruit.type.value}x growth at (${fruit.x}, ${fruit.y}) - Distance: ${dist}\n`;
-    //     });
-    //     state += `\n`;
-    // }
-    // --- END ORIGINAL BLOCK ---
-
-    // Single sorted fruit list: best value/distance first, high-value flagged inline.
-    // (Replaces a previous duplicate HIGH-VALUE TARGETS block that re-listed these.)
-    const rankedFruits = gameState.fruits
-        .map(fruit => ({
-            fruit,
-            dist: toroidalDist(head.x, head.y, fruit.x, fruit.y)
-        }))
-        .sort((a, b) => {
-            const ratioA = a.fruit.type.value / Math.max(a.dist, 1);
-            const ratioB = b.fruit.type.value / Math.max(b.dist, 1);
-            return ratioB - ratioA; // higher value/distance first
+    // Plain fruit list: emoji, coordinates and value — plus wrap-aware distance
+    // and compass hint when provideHintsEnabled is on. No ranking and no target
+    // recommendation; choosing a goal is up to the LLM.
+    if (fruitGuidanceEnabled) {
+        state += `FRUITS (${gameState.fruits.length} available):\n`;
+        gameState.fruits.forEach((fruit, i) => {
+            let line = `${i + 1}. ${fruit.type.emoji} at (${fruit.x}, ${fruit.y}) - Value: ${fruit.type.value}`;
+            if (provideHintsEnabled) {
+                const dist = toroidalDist(head.x, head.y, fruit.x, fruit.y);
+                line += ` - Distance: ${dist}${wrapBearing(head, fruit)}`;
+            }
+            state += line + `\n`;
         });
-
-    state += `FRUITS (${gameState.fruits.length} available, best first; * = high-value):\n`;
-    rankedFruits.forEach(({ fruit, dist }, i) => {
-        const marker = fruit.type.value > 1 ? ' *' : '';
-        state += `${i + 1}. ${fruit.type.emoji} at (${fruit.x}, ${fruit.y}) - Value: ${fruit.type.value} - Distance: ${dist}${marker}\n`;
-    });
-    state += `\n`;
-
-    if (closestFruit) {
-        const lengthAdvantage = snake.length - enemySnake.length;
-        state += `CLOSEST FRUIT: ${closestFruit.type.emoji} at (${closestFruit.x}, ${closestFruit.y}) - Value: ${closestFruit.type.value} - Distance: ${closestDist}\n`;
-        state += `Distance to enemy: ${distToEnemy}\n`;
-        state += `YOUR LENGTH ADVANTAGE: ${lengthAdvantage > 0 ? '+' : ''}${lengthAdvantage} (Target fruits to maintain or gain advantage)\n\n`;
+        state += `\n`;
     }
+
+    const lengthAdvantage = snake.length - enemySnake.length;
+    state += `Distance to enemy: ${distToEnemy}\n`;
+    state += `YOUR LENGTH ADVANTAGE: ${lengthAdvantage > 0 ? '+' : ''}${lengthAdvantage} (Target fruits to maintain or gain advantage)\n\n`;
 
     // Legend
     const viewDescription = LLM_FULL_GRID_VIEW ? "full board" : `${viewSize}x${viewSize} area around you`;
     state += `Board view (${viewDescription}):\n`;
-    state += `@ = your head | ★ = fruit | ${playerNum === 1 ? "R/ r" : "B/b"} = your body | ${playerNum === 1 ? "B/b" : "R/r"} = enemy | . = empty\n`;
+    state += `@ = your head | fruit = its emoji | ${playerNum === 1 ? "R/ r" : "B/b"} = your body | ${playerNum === 1 ? "B/b" : "R/r"} = enemy | . = empty\n`;
     state += `\n`;
     state += boardView + "\n";
 
@@ -1499,8 +1480,7 @@ function getBoardState(playerNum) {
     const leftPos = wrapPosition(head.x - 1, head.y);
     const rightPos = wrapPosition(head.x + 1, head.y);
 
-    // Get current direction to prevent reverse movement
-    const currentDir = playerNum === 1 ? gameState.direction1 : gameState.direction2;
+    // Reverse movement is forbidden (currentDir was resolved near the head lookups)
     const forbiddenDir = { x: -currentDir.x, y: -currentDir.y };
 
 
@@ -1523,70 +1503,29 @@ function getBoardState(playerNum) {
         }
     }
 
-    // LEFT - only if not going right and position is safe
-    if (!(forbiddenDir.x === 1 && forbiddenDir.y === 0)) {
+    // LEFT - only if not going right (i.e. reverse = left) and position is safe
+    if (!(forbiddenDir.x === -1 && forbiddenDir.y === 0)) {
         if (!wouldCollideWithSnakeBody(leftPos, snake) &&
             !wouldCollideWithSnake(leftPos, enemySnake)) {
             safeMoves.push('left');
         }
     }
 
-    // RIGHT - only if not going left and position is safe
-    if (!(forbiddenDir.x === -1 && forbiddenDir.y === 0)) {
+    // RIGHT - only if not going left (i.e. reverse = right) and position is safe
+    if (!(forbiddenDir.x === 1 && forbiddenDir.y === 0)) {
         if (!wouldCollideWithSnakeBody(rightPos, snake) &&
             !wouldCollideWithSnake(rightPos, enemySnake)) {
             safeMoves.push('right');
         }
     }
 
-    // Only include safe moves in the prompt if configured to do so
+    // Only include safe moves in the prompt if configured to do so — a plain,
+    // unordered list; which fruit (if any) to pursue is the LLM's decision.
+    // The "answer with one word" tag re-states the output contract at the point
+    // of decision — small models otherwise fail to ground bearing hints into an
+    // actual direction word and just parrot their current direction.
     if (collisionAvoidanceEnabled && safeMoves.length > 0) {
-        // Add directional guidance toward closest fruit when multiple safe moves available
-        if (safeMoves.length > 1 && closestFruit) {
-            const dx = closestFruit.x - head.x;
-            const dy = closestFruit.y - head.y;
-
-            // Determine preferred direction based on fruit position (considering wraparound)
-            let preferredDir = '';
-            const absDx = Math.abs(dx);
-            const absDy = Math.abs(dy);
-
-            // Account for wraparound - choose the shorter path
-            const wrapDx = GRID_SIZE - absDx;
-            const wrapDy = GRID_SIZE - absDy;
-
-            // Determine horizontal preference
-            if (absDx > 0) {
-                if (absDx <= wrapDx) {
-                    preferredDir = dx > 0 ? 'right' : 'left';
-                } else {
-                    preferredDir = dx > 0 ? 'left' : 'right';
-                }
-            }
-
-            // Determine vertical preference
-            if (absDy > 0) {
-                let vertDir = '';
-                if (absDy <= wrapDy) {
-                    vertDir = dy > 0 ? 'down' : 'up';
-                } else {
-                    vertDir = dy > 0 ? 'up' : 'down';
-                }
-
-                // Choose vertical over horizontal if it's a shorter distance or no horizontal preference
-                if (!preferredDir || absDy < absDx) {
-                    preferredDir = vertDir;
-                }
-            }
-
-            if (preferredDir && safeMoves.includes(preferredDir)) {
-                state += `Safe moves: ${safeMoves.join(', ')} (Strategically, ${preferredDir} leads toward closest fruit)\n`;
-            } else {
-                state += `Safe moves: ${safeMoves.join(', ')}\n`;
-            }
-        } else {
-            state += `Safe moves: ${safeMoves.join(', ')}\n`;
-        }
+        state += `Safe moves (answer with one word): ${safeMoves.join(', ')}\n`;
     } else if (collisionAvoidanceEnabled && safeMoves.length === 0) {
         state += `Safe moves: DANGER - all moves blocked!\n`;
     }
@@ -2325,7 +2264,13 @@ async function getLLMDirection(playerNum, maxTokens = null) {
             messages: [
                 {
                     role: 'system',
-                    content: SYSTEM_PROMPT.replace('{VISIBILITY_SIZE}', VIEW_RADIUS * 2 + 1)
+                    content: SYSTEM_PROMPT
+                        .replace('{VISIBILITY_SIZE}', VIEW_RADIUS * 2 + 1)
+                        // {HINTS_DESC} mirrors the provideHintsEnabled toggle so the
+                        // system prompt never describes hints the user prompt lacks.
+                        .replace('{HINTS_DESC}', provideHintsEnabled
+                            ? ', distance and compass hint (e.g. "8 right, 1 down") — to move toward a fruit, answer with a word from its compass hint'
+                            : '')
                 },
                 {
                     role: 'user',
@@ -2369,7 +2314,15 @@ async function getLLMDirection(playerNum, maxTokens = null) {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ***HIDDEN***'
             });
-            console.log('Body:', JSON.stringify(requestBody, null, 2));
+            // Print metadata + prompts human-readably (real newlines; the raw
+            // JSON Body dump escaped every \n and made prompts unreadable).
+            console.log(`Model: ${model} | temp: 0 | max_tokens: ${maxTokens === null ? 'omitted' : maxTokens} | thinking: ${thinkingModeEnabled}`);
+            console.log('--- System prompt ---');
+            console.log(requestBody.messages[0].content);
+            console.log('--- User prompt ---');
+            console.log(requestBody.messages[1].content);
+            console.log('--------------------');
+            console.log('Body (raw JSON):', JSON.stringify(requestBody, null, 2));
         }
 
         let response;
@@ -2414,6 +2367,11 @@ async function getLLMDirection(playerNum, maxTokens = null) {
         content = content.replace(/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi, '').trim();
 
         const choice = content.toLowerCase();
+
+        // Extract the first direction word, tolerating punctuation/chattiness
+        // ("down.", "\"Up\"", "I'll go left"). An exact-match requirement meant
+        // any extra text yielded NO direction, silently freezing the snake's loop.
+        const directionWord = choice.match(/\b(up|down|left|right)\b/)?.[1];
 
         // Check if content is null
         const isNullContent = !data.choices || !data.choices[0] || !data.choices[0].message || data.choices[0].message.content === null;
@@ -2464,7 +2422,13 @@ async function getLLMDirection(playerNum, maxTokens = null) {
             'right': { x: 1, y: 0 }
         };
 
-        const direction = directionMap[choice];
+        if (!directionWord) {
+            // No usable direction in the reply — treat as a failure so the
+            // standard retry/forfeit machinery handles it (instead of freezing).
+            throw new Error(`No direction in response: "${content.slice(0, 80)}"`);
+        }
+
+        const direction = directionMap[directionWord];
 
         // Reset consecutive failures counter on successful API call
         const consecutiveFailuresKey = playerNum === 1 ? 'player1ConsecutiveFailures' : 'player2ConsecutiveFailures';
@@ -3403,6 +3367,19 @@ function toggleCollisionAvoidance() {
     }
     addLog(`${collisionAvoidanceEnabled ? '🛡️ Collision avoidance enabled' : '🚫 Collision avoidance disabled'}`, 1);
     addLog(`${collisionAvoidanceEnabled ? '🛡️ Collision avoidance enabled' : '🚫 Collision avoidance disabled'}`, 2);
+}
+
+// Toggle navigation hints (per-fruit distance + compass) — next API call
+function toggleProvideHints() {
+    provideHintsEnabled = provideHintsCheckbox.checked;
+    if (gameState.debugMode) {
+        console.log(`Provide hints: ${provideHintsEnabled ? 'on' : 'off'}`);
+    }
+    const msg = provideHintsEnabled
+        ? '🧭 Hints enabled (fruit distance + compass directions in prompt)'
+        : '🚫 Hints disabled (fruit coordinates + value only)';
+    addLog(msg, 1);
+    addLog(msg, 2);
 }
 
 // Toggle model reasoning (thinking) mode — changes take effect immediately (next API call)

@@ -108,7 +108,9 @@ const LLM_TIMEOUT_MS = 30000;         // Per-request LLM timeout (30s)
 const API_RETRY_DELAY_MS = 2000;      // Base retry delay (also seeds timeout backoff)
 const MAX_TOKENS_CASCADE = [10, 100, 1000, null]; // Adaptive token limits per player
 let   VIEW_RADIUS = 10;               // Default snake vision radius (1–30, adjustable from UI)
-let   collisionAvoidanceEnabled = true; // LLM hints + auto safe-move override
+let   collisionAvoidanceEnabled = true; // LLM safe-move list + auto safe-move override
+const fruitGuidanceEnabled = true;    // Include FRUITS list in prompt — code toggle
+let   provideHintsEnabled = true;     // Per-fruit distance + compass hints (Options UI toggle "🧭 Provide Hints")
 let   thinkingModeEnabled = false;    // Pass enable_thinking to chat_template_kwargs
 const MAX_LOG_ENTRIES = 100;          // Cap on game-log <p> entries (oldest trimmed)
 
