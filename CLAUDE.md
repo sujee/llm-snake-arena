@@ -65,6 +65,9 @@ This is a snake battle game with AI-controlled opponents powered by LLM APIs. Th
 4. Perform performance testing after optimizations
 5. Ensure all critical bugs are fixed before adding new features
 
+### Git Operations ⚠️
+**ALWAYS ask for confirmation before any `git commit` (or other git mutation: push, amend, reset, etc.), even if the user has approved similar operations in the past.** Present the proposed message/files first, then wait for an explicit yes.
+
 ## Critical Files
 - `snake.html`: Main UI structure (maintain careful balance of div tags)
 - `style.css`: Layout and styling (preserve flex layouts and panel dimensions)
