@@ -33,6 +33,9 @@ let VIEW_RADIUS = 10; // Initialized to 10 as requested, can be changed from UI
 let collisionAvoidanceEnabled = true;
 // If true, lets the model "think"/reason before answering (chat_template_kwargs.enable_thinking)
 let thinkingModeEnabled = false;
+// If true, every turn and detailed API/Timing log is printed to the game log.
+// If false (default), only key game events (food eaten, collisions avoided, deaths, winner) are logged.
+let allLogsEnabled = false;
 
 // LLM System Prompt
 //
@@ -159,6 +162,7 @@ const debugCheckbox = document.getElementById('debug-checkbox');
 const collisionAvoidanceCheckbox = document.getElementById('collision-avoidance-checkbox');
 const thinkingModeCheckbox = document.getElementById('thinking-mode-checkbox');
 const loopCheckbox = document.getElementById('loop-checkbox');
+const allLogsCheckbox = document.getElementById('all-logs-checkbox');
 const viewRadiusInput = document.getElementById('view-radius-input');
 const logContent = document.getElementById('log-content');
 const gameTimerElement = document.getElementById('game-timer');
@@ -338,6 +342,10 @@ if (thinkingModeCheckbox) {
     addTrackedEventListener(thinkingModeCheckbox, 'change', toggleThinkingMode);
 }
 
+if (allLogsCheckbox) {
+    addTrackedEventListener(allLogsCheckbox, 'change', toggleAllLogs);
+}
+
 if (loopCheckbox) {
     addTrackedEventListener(loopCheckbox, 'change', toggleLoopMode);
     // Also add click handler for better responsiveness
@@ -436,6 +444,11 @@ if (loopCheckbox) {
     }
 } else if (gameState.debugMode) {
     console.error('Loop checkbox not found during initialization!');
+}
+
+// Initialize all-logs mode from checkbox state (default off)
+if (allLogsCheckbox) {
+    allLogsEnabled = allLogsCheckbox.checked;
 }
 
 // Fruit info with rarity labels (data source for the legend popover)
@@ -1128,10 +1141,18 @@ function cleanupGameResources() {
     }
 }
 
-// Add log entry
-function addLog(message, playerNum = null, forceLog = false) {
+// Add log entry.
+// - forceLog: always show, even if the game is over (used for winner banners / critical errors).
+// - isInteresting: show even when allLogsEnabled is false (used for key game events: food eaten, collisions, deaths).
+function addLog(message, playerNum = null, forceLog = false, isInteresting = false) {
     // Stop adding logs once game is over (unless forced for final messages)
     if (gameState.gameOver && !forceLog) {
+        return;
+    }
+
+    // In quiet-log mode (allLogs off) we skip routine per-turn/API messages unless
+    // they are marked as interesting game events or are forced (e.g. game-over banner).
+    if (!allLogsEnabled && !forceLog && !isInteresting) {
         return;
     }
 
@@ -2278,7 +2299,7 @@ async function getLLMDirectionWithRetry(playerNum, attempt = 0) {
                 return getLLMDirectionWithRetry(playerNum, attempt + 1);
             }
             // After max 429 retries, stop the game
-            addLog(`❌ API error: Too many rate limit failures (${MAX_429_RETRIES} attempts). Game stopped.`, playerNum);
+            addLog(`❌ API error: Too many rate limit failures (${MAX_429_RETRIES} attempts). Game stopped.`, playerNum, true);
             gameState.gameOver = true;
             needsRedraw = true; // Mark canvas for redraw
             checkGameOver();
@@ -2287,7 +2308,7 @@ async function getLLMDirectionWithRetry(playerNum, attempt = 0) {
 
         // For other errors, check max retry limit
         if (attempt >= MAX_API_RETRIES) {
-            addLog(`❌ API error: Too many consecutive failures (${MAX_API_RETRIES} attempts): ${error.message}. Game stopped.`, playerNum);
+            addLog(`❌ API error: Too many consecutive failures (${MAX_API_RETRIES} attempts): ${error.message}. Game stopped.`, playerNum, true);
             gameState.gameOver = true;
             needsRedraw = true; // Mark canvas for redraw
             checkGameOver();
@@ -2635,7 +2656,7 @@ function moveSingleSnake(playerNum, latency) {
             const safeDirection = findSafeDirection(snake[0], gameState[directionKey], snake, otherSnake);
             if (safeDirection.x !== gameState[directionKey].x || safeDirection.y !== gameState[directionKey].y) {
                 gameState[directionKey] = safeDirection;
-                addLog(`🔄 Collision avoided!`, playerNum);
+                addLog(`🔄 Collision avoided!`, playerNum, false, true);
             }
         }
     }
@@ -2656,12 +2677,12 @@ function moveSingleSnake(playerNum, latency) {
         gameState[deadKey] = true;
         const otherDeadKey = playerNum === 1 ? 'player2Dead' : 'player1Dead';
         gameState[otherDeadKey] = true;
-        addLog(`💥 HEAD-ON COLLISION!`, playerNum);
+        addLog(`💥 HEAD-ON COLLISION!`, playerNum, false, true);
         checkGameOver();
     } else if (collision) {
         playerDead = true;
         gameState[deadKey] = true;
-        addLog(`💀 Hit ${collision}!`, playerNum);
+        addLog(`💀 Hit ${collision}!`, playerNum, false, true);
         checkGameOver();
     }
 
@@ -2671,7 +2692,7 @@ function moveSingleSnake(playerNum, latency) {
         const fruit = gameState.fruits[i];
         if (newHead.x === fruit.x && newHead.y === fruit.y) {
             growth = fruit.type.value;
-            addLog(`${fruit.type.emoji} Ate +${growth}`, playerNum);
+            addLog(`${fruit.type.emoji} Ate +${growth}`, playerNum, false, true);
             gameState.fruits.splice(i, 1);
             placeFruit(); // Replace with new fruit
         }
@@ -2860,7 +2881,7 @@ async function moveSnakeWithLLM(playerNum, abortSignal, timeoutAttempt = 0) {
             // is otherwise no terminator for persistent timeouts).
             if (timeoutAttempt + 1 > MAX_TIMEOUT_RETRIES) {
                 const modelName = (playerNum === 1 ? gameState.player1Model : gameState.player2Model).split('/').pop();
-                addLog(`❌ ${playerNum === 1 ? 'Red' : 'Blue'} (${modelName}) timed out ${timeoutAttempt + 1}x — forfeits.`, playerNum);
+                addLog(`❌ ${playerNum === 1 ? 'Red' : 'Blue'} (${modelName}) timed out ${timeoutAttempt + 1}x — forfeits.`, playerNum, false, true);
                 // Mark this player dead so checkGameOver declares the opponent
                 // the winner, logs the banner, and disables pause. (Mirrors the
                 // collision-death path in moveSingleSnake.)
@@ -3445,7 +3466,7 @@ function startLoopCountdown() {
     }
 
     gameState.loopCountdownRemaining = 5;
-    addLog(`🔁 Round ${gameState.loopRoundNumber + 1} starting in 5 seconds...`);
+    addLog(`🔁 Round ${gameState.loopRoundNumber + 1} starting in 5 seconds...`, null, false, true);
 
     // Update overlay to show countdown
     updateLoopCountdownDisplay();
@@ -3500,7 +3521,7 @@ function startNextLoopRound() {
     updateScores();
 
     // Add log entry for new round
-    addLog(`🔁 Round ${gameState.loopRoundNumber} started!`);
+    addLog(`🔁 Round ${gameState.loopRoundNumber} started!`, null, false, true);
 
     // Reset and start timer
     resetTimer();
@@ -3528,6 +3549,14 @@ function stopLoopCountdown() {
 // Toggle debug mode
 function toggleDebug() {
     gameState.debugMode = debugCheckbox.checked;
+}
+
+// Toggle all-logs mode (verbose vs. quiet game log)
+function toggleAllLogs() {
+    allLogsEnabled = allLogsCheckbox.checked;
+    if (gameState.debugMode) {
+        console.log(`All logs mode: ${allLogsEnabled ? 'enabled' : 'disabled'}`);
+    }
 }
 
 // Update visibility radius
@@ -3636,7 +3665,7 @@ function restartGame() {
         if (overlay) overlay.remove();
     }
 
-    addLog('🎮 New battle started!');
+    addLog('🎮 New battle started!', null, false, true);
 
     // Reset and start timer
     resetTimer();
@@ -3697,7 +3726,7 @@ function startGame(fromDemoMode = false) {
     document.getElementById('p1-model-stats').textContent = 'length: 3, moves: 0 ↑0B ↓0B';
     document.getElementById('p2-model-stats').textContent = 'length: 3, moves: 0 ↑0B ↓0B';
 
-    addLog(`🐍 Snake battle: ${gameState.player1Model} vs ${gameState.player2Model}`);
+    addLog(`🐍 Snake battle: ${gameState.player1Model} vs ${gameState.player2Model}`, null, false, true);
 
     // Reset and start game timer
     resetTimer();
