@@ -6,7 +6,9 @@ const CANVAS_HEIGHT = GRID_SIZE * CELL_SIZE;
 const NUM_FRUITS = 3; // Number of fruits on board
 
 // Timing and Retry Constants
-const LLM_TIMEOUT_MS = 30000; // 30 second timeout for LLM responses
+const LLM_TIMEOUT_MS = 45000; // 45s per-request timeout. Reasoning models that
+                              // can't disable thinking (DeepSeek-V4.1-Flash) can
+                              // run ~28s on a hard board, so 30s was too tight.
 const API_RETRY_DELAY_MS = 2000; // 2 second delay between API retries
 const MAX_API_RETRIES = 10; // Max retry attempts for non-429 errors
 const MAX_429_RETRIES = 3; // Max retry attempts specifically for 429 rate limit errors
@@ -76,14 +78,13 @@ const FRUIT_TYPES = [
 ];
 
 // Game State
-// Universal max_tokens cascade for all models
-const MAX_TOKENS_CASCADE = [10, 100, 1000, null]; // null means omit max_tokens parameter
-
-// Track max_tokens level per player (persists across moves in same game)
-let playerMaxTokensLevel = {
-    1: 0, // Both start at level 0 (max_tokens=10)
-    2: 0
-};
+// Per-move max_tokens: omitted (null) so the model finishes on its own. Some
+// reasoning models ignore `enable_thinking:false` (DeepSeek-V4.1-Flash always
+// thinks) and can emit 1.5k-3.7k completion tokens, which any fixed cap
+// truncates mid-reasoning (finish_reason 'length', empty content). No cap means
+// no wasted escalation retries; LLM_TIMEOUT_MS is the wall-clock backstop.
+// buildChatRequest omits the param entirely when this is null.
+const GAME_MAX_TOKENS = null;
 
 let gameState = {
     snake1: [],
@@ -729,9 +730,11 @@ const FRUIT_LEGEND_INFO = [
 ];
 
 // Build the legend fruit rows into the given container (reused by the popover).
+// Rows are shown cheapest-first: FRUIT_LEGEND_INFO is kept in rarity order, so
+// the display order is applied here rather than by reordering the data.
 function buildFruitLegendRows(container) {
     container.innerHTML = '';
-    FRUIT_LEGEND_INFO.forEach(fruit => {
+    SnakeCore.sortByValueAsc(FRUIT_LEGEND_INFO).forEach(fruit => {
         const item = document.createElement('div');
         item.className = `fruit-item ${fruit.isUltraRare ? 'ultra-rare' : fruit.isRare ? 'rare' : ''}`;
 
@@ -1624,11 +1627,6 @@ function addLog(message, playerNum = null, forceLog = false, isInteresting = fal
 }
 
 // Initialize game state
-// Reset function for new games
-function resetMaxTokensLevels() {
-    playerMaxTokensLevel = { 1: 0, 2: 0 }; // Reset both players to level 0
-}
-
 function initializeGame() {
     // Player 1 (Red) starts on left side
     gameState.snake1 = [
@@ -1680,9 +1678,6 @@ function initializeGame() {
     gameState.player2OutputTokens = 0;
     gameState.overlayDismissed = false;
     gameState.winnerLogged = false;
-
-    // Reset max_tokens levels for both players
-    resetMaxTokensLevels();
 
     // Reset stats display in DOM
     document.getElementById('p1-model-name').textContent = 'Player 1';
@@ -2560,47 +2555,20 @@ function formatTimestamp(date) {
 // Get LLM direction with retry logic for rate limiting
 async function getLLMDirectionWithRetry(playerNum, attempt = 0) {
     try {
-        // Use current max_tokens level for this player
-        const maxTokens = MAX_TOKENS_CASCADE[playerMaxTokensLevel[playerNum]];
-
         if (gameState.debugMode) {
-            console.log(`P${playerNum}: Request with max_tokens=${maxTokens || 'unset'}`);
+            console.log(`P${playerNum}: Request with max_tokens=${GAME_MAX_TOKENS === null ? 'omitted' : GAME_MAX_TOKENS}`);
         }
 
-        return await getLLMDirection(playerNum, maxTokens);
+        return await getLLMDirection(playerNum, GAME_MAX_TOKENS);
     } catch (error) {
         // Don't fail or log if game is paused or aborted
         if (gameState.paused || gameState.gameOver) {
             throw error;
         }
 
-        // If limited content error (null or length), advance to next max_tokens level for this player only
-        if ((error.message.includes('Limited API response') || error.message.includes('Null API response')) &&
-            playerMaxTokensLevel[playerNum] < MAX_TOKENS_CASCADE.length - 1) {
-
-            // Log the max_tokens cascade attempt in game log
-            const currentTokens = MAX_TOKENS_CASCADE[playerMaxTokensLevel[playerNum]];
-            const nextLevel = playerMaxTokensLevel[playerNum] + 1;
-            const nextTokens = MAX_TOKENS_CASCADE[nextLevel];
-
-            addLog(`⚙️ Upping max_tokens: ${currentTokens || 'unset'} → ${nextTokens || 'unset'}`, playerNum);
-
-            // Advance to next max_tokens level for this player (with bounds checking)
-            if (playerMaxTokensLevel[playerNum] < MAX_TOKENS_CASCADE.length - 1) {
-                playerMaxTokensLevel[playerNum]++;
-            } else {
-                // Cap at the maximum level
-                playerMaxTokensLevel[playerNum] = MAX_TOKENS_CASCADE.length - 1;
-            }
-
-            if (gameState.debugMode) {
-                console.log(`P${playerNum}: Advancing max_tokens level to ${playerMaxTokensLevel[playerNum]} (max_tokens=${nextTokens || 'unset'})`);
-            }
-
-            // Retry with new max_tokens level
-            return getLLMDirectionWithRetry(playerNum, attempt);
-        }
-
+        // NOTE: if a provider/model truncates anyway (its own default cap or
+        // context limit) the `finish_reason: 'length'` response falls through to
+        // the normal failure/retry path below — no max_tokens escalation.
         const failuresKey = playerNum === 1 ? 'player1ApiFailures' : 'player2ApiFailures';
         const consecutiveFailuresKey = playerNum === 1 ? 'player1ConsecutiveFailures' : 'player2ConsecutiveFailures';
 
@@ -2667,7 +2635,7 @@ async function getLLMDirectionWithRetry(playerNum, attempt = 0) {
     }
 }
 
-async function getLLMDirection(playerNum, maxTokens = null) {
+async function getLLMDirection(playerNum, maxTokens = GAME_MAX_TOKENS) {
     const snake = playerNum === 1 ? gameState.snake1 : gameState.snake2;
     const currentDir = playerNum === 1 ? gameState.direction1 : gameState.direction2;
     const otherSnake = playerNum === 1 ? gameState.snake2 : gameState.snake1;
@@ -2786,6 +2754,7 @@ async function getLLMDirection(playerNum, maxTokens = null) {
 
         let data;
         let content;
+        let rawContent;
         let isNullContent;
         let isLengthLimited;
         let finishReason;
@@ -2795,9 +2764,11 @@ async function getLLMDirection(playerNum, maxTokens = null) {
                 const detail = data && data.error ? (data.error.message || data.error.type) : response.statusText;
                 throw new Error(`HTTP ${response.status}: ${detail || response.statusText}`);
             }
-            content = SnakeCore.parseAnthropicText(data);
-            // Strip out any thinking/reasoning tags and their content
-            content = content.replace(/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi, '').trim();
+            rawContent = SnakeCore.parseAnthropicText(data);
+            // Strip thinking/reasoning wrappers for the null check / estimates;
+            // the parser still receives rawContent so it can honor a closing
+            // marker (orphan or paired) and parse only the post-think answer.
+            content = SnakeCore.stripThinkingTags(rawContent);
             isNullContent = !content;
             isLengthLimited = data.stop_reason === 'max_tokens';
             finishReason = data.stop_reason || 'unknown';
@@ -2814,21 +2785,20 @@ async function getLLMDirection(playerNum, maxTokens = null) {
             throw new Error('Invalid response: No choices in API response');
         }
 
-        content = data.choices[0]?.message?.content?.trim() || '';
-
-        // Strip out any thinking/reasoning tags and their content
-        content = content.replace(/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi, '').trim();
+        rawContent = data.choices[0]?.message?.content?.trim() || '';
+        content = SnakeCore.stripThinkingTags(rawContent);
         }
 
         const choice = content.toLowerCase();
 
-        // Extract the first direction word, tolerating punctuation/chattiness
-        // ("down.", "\"Up\"", "I'll go left"). See SnakeCore.parseDirectionReply.
-        const directionWord = SnakeCore.parseDirectionReply(choice);
+        // Tolerates punctuation/chattiness ("down.", "\"Up\"", "I'll go left")
+        // and reasoning wrappers, and prefers the committed answer over an
+        // option the model merely considered. See SnakeCore.parseDirectionReply.
+        const directionWord = SnakeCore.parseDirectionReply(rawContent);
 
         if (!isAnthropic) {
-        // Check if content is null
-        isNullContent = !data.choices || !data.choices[0] || !data.choices[0].message || data.choices[0].message.content === null;
+        // Check if content is null (or was only a reasoning block)
+        isNullContent = !data.choices || !data.choices[0] || !data.choices[0].message || data.choices[0].message.content === null || !content;
 
         // Check if response was cut off due to length limit
         isLengthLimited = data.choices?.[0]?.finish_reason === 'length';
@@ -2884,7 +2854,7 @@ async function getLLMDirection(playerNum, maxTokens = null) {
             }
         }
 
-        // Throw error for null content or length-limited responses so they're counted as failures and retried with higher max_tokens
+        // Throw error for null content or length-limited responses so they're counted as failures and retried
         if (isNullContent || isLengthLimited) {
             throw new Error(`Limited API response (finish_reason: ${finishReason})`);
         }

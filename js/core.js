@@ -161,11 +161,68 @@
         return preferredDirection;
     }
 
-    // Extracted from getLLMDirection: first direction word in a chatty reply.
-    // Returns 'up'|'down'|'left'|'right' or null.
+    // Removes model reasoning wrappers before parsing. Handles paired blocks
+    // (`<thinking>…</thinking>`) AND orphan tags: some templates emit only a
+    // leading/closing marker (e.g. GLM's `</think>` with no opening tag), so
+    // stripping paired blocks alone left the whole reasoning prefix in band.
+    function stripThinkingTags(text) {
+        if (typeof text !== 'string') return '';
+        return text
+            .replace(/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi, ' ')
+            .replace(/<\/?(thinking|think|thought|reasoning)>/gi, ' ')
+            .trim();
+    }
+
+    // Markers that signal "the answer follows" — used to pick the direction
+    // word the model actually committed to, not one it merely considered.
+    const DIRECTION_ANSWER_MARKERS = /\b(answer|move|go|choose|pick|play|direction|respond|final|select)\b/;
+
+    // Extracted from getLLMDirection. Returns 'up'|'down'|'left'|'right'|null.
+    // Stronger than a plain first-match:
+    //  1. Drops reasoning wrappers up front (paired or orphan tags).
+    //  2. If a thinking block was closed, parses only the text after the LAST
+    //     closer (the post-think answer segment).
+    //  3. Prefers a direction word introduced by an answer marker in the span
+    //     since the previous direction mention ("I'll go left", "answer: up"),
+    //     scanning from the end. Scoping to that span stops a marker from an
+    //     earlier clause ("go up, not down") from claiming a later option.
+    //  4. Otherwise returns the LAST mention — chatty models restate their
+    //     pick at the end, while a one-word reply is unchanged either way.
     function parseDirectionReply(text) {
         if (typeof text !== 'string') return null;
-        return text.toLowerCase().match(/\b(up|down|left|right)\b/)?.[1] || null;
+        const lower = text.toLowerCase();
+
+        // Prefer the post-reasoning segment when a closer is present.
+        let s = lower;
+        const closers = [...lower.matchAll(/<\/(thinking|think|thought|reasoning)>/g)];
+        if (closers.length) {
+            const last = closers[closers.length - 1];
+            s = lower.slice(last.index + last[0].length);
+        }
+        s = stripThinkingTags(s);
+
+        let matches = [...s.matchAll(/\b(up|down|left|right)\b/g)];
+        if (matches.length === 0 && closers.length) {
+            // Nothing after the closer (e.g. "right</thinking>") — salvage
+            // from the whole reply instead of failing.
+            s = stripThinkingTags(lower);
+            matches = [...s.matchAll(/\b(up|down|left|right)\b/g)];
+        }
+        if (matches.length === 0) return null;
+
+        for (let i = matches.length - 1; i >= 0; i--) {
+            const segStart = i > 0 ? matches[i - 1].index + matches[i - 1][0].length : 0;
+            const between = s.slice(segStart, matches[i].index);
+            if (DIRECTION_ANSWER_MARKERS.test(between)) return matches[i][1];
+        }
+        return matches[matches.length - 1][1];
+    }
+
+    // Stable ascending sort by numeric `value`, returning a new array. Used to
+    // present the fruit legend cheapest-first regardless of source order.
+    function sortByValueAsc(items) {
+        if (!Array.isArray(items)) return [];
+        return [...items].sort((a, b) => (a.value || 0) - (b.value || 0));
     }
 
     function calculatePercentile(sortedArray, percentile) {
@@ -355,6 +412,10 @@
     //   values, so it is omitted for the whole endpoint), no
     //   chat_template_kwargs (unknown body fields are rejected), and
     //   max_completion_tokens instead of max_tokens.
+    // - Non-OpenAI: chat_template_kwargs.enable_thinking mirrors the toggle,
+    //   plus reasoning_effort:'low' when thinking is off (some models ignore
+    //   enable_thinking but honor reasoning_effort; 'low' suppresses runaway
+    //   output where 'none' can backfire).
     // - Local servers ignore auth → empty key becomes the placeholder.
     function buildChatRequest({ apiUrl, apiKey, model, messages, temperature, maxTokens = null, stream = false, thinkingEnabled = false }) {
         const url = `${apiUrl}chat/completions`;
@@ -375,6 +436,16 @@
         }
         if (!isOpenAI) {
             body.chat_template_kwargs = { enable_thinking: !!thinkingEnabled };
+            // Reasoning suppression. `enable_thinking:false` alone is ignored by
+            // several models; a reasoning_effort hint is honored. Value 'low'
+            // (not 'none'): on GLM-5.3-Flash 'none' paradoxically *increases*
+            // output — it ran to 8192 tokens over ~93s (finish_reason length) —
+            // while 'low' finishes in 2-4s / <150 tokens. DeepSeek ignores the
+            // hint's magnitude but still stops naturally. Only sent when the
+            // user wants no thinking; models that don't know the field ignore it.
+            if (!thinkingEnabled) {
+                body.reasoning_effort = 'low';
+            }
         }
         return { url, headers, body };
     }
@@ -416,7 +487,9 @@
         checkCollision,
         checkHeadToHead,
         findSafeDirection,
+        stripThinkingTags,
         parseDirectionReply,
+        sortByValueAsc,
         calculatePercentile,
         calculateLatencyStats,
         formatBytes,

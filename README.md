@@ -30,7 +30,7 @@ The original version can be accessed
 
 - **Independent Movement**: Each snake moves as soon as its LLM responds; faster models move more frequently
 - **Loop Mode**: Auto-restart with a 5-second countdown after each game ends (on by default)
-- **Robust API Layer**: 30s per-request timeout with retries (2s backoff; exponential backoff on HTTP 429); exponential backoff on move timeouts (2s→4s→8s→16s→32s) with forfeit after 5 consecutive timeouts; adaptive `max_tokens`; automatic stripping of `<thinking>` tags; forfeit after 3 consecutive non-timeout failures
+- **Robust API Layer**: 45s per-request timeout with retries (2s backoff; exponential backoff on HTTP 429); exponential backoff on move timeouts (2s→4s→8s→16s→32s) with forfeit after 5 consecutive timeouts; no `max_tokens` cap (reasoning models answer in full) plus `reasoning_effort:'low'` / `enable_thinking:false` when Model Reasoning is off; reasoning-tag stripping + tolerant direction parsing; forfeit after 3 consecutive non-timeout failures
 
 ### Visualizations
 
@@ -113,9 +113,9 @@ These have no UI control — change them in the source:
 ```javascript
 const GRID_SIZE = 30;                 // Board dimensions (30×30). Try 20 for faster games, 40 for more space
 const NUM_FRUITS = 3;                 // Fruits on the board at once
-const LLM_TIMEOUT_MS = 30000;         // Per-request LLM timeout (30s)
+const LLM_TIMEOUT_MS = 45000;         // Per-request LLM timeout (45s)
 const API_RETRY_DELAY_MS = 2000;      // Base retry delay (also seeds timeout backoff)
-const MAX_TOKENS_CASCADE = [10, 100, 1000, null]; // Adaptive token limits per player
+const GAME_MAX_TOKENS = null;         // null = omit max_tokens (let the model finish; reasoning models need >1k)
 const fruitGuidanceEnabled = true;    // Include FRUITS list in prompt (keep on — off isn't viable gameplay)
 const MAX_LOG_ENTRIES = 100;          // Cap on game-log <p> entries (oldest trimmed)
 ```

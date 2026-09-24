@@ -42,11 +42,11 @@ snake-battle/
 ### LLM Integration
 
 - **Endpoints:** `GET {apiUrl}models` (load; tries `?verbose=true` first for modality metadata, falls back to plain `/models`); `POST {apiUrl}chat/completions` (decisions).
-- **Request body:** `{ model, messages:[{system}, {user}], temperature: 0, chat_template_kwargs: { enable_thinking } }` plus `max_tokens` only when non-null. `enable_thinking` mirrors the **Model Reasoning** Options toggle (`thinkingModeEnabled`, default `false`); setting it `false` disables model "thinking" mode (e.g. GLM-5.x) so only the direction answer comes back — harmless for models that don't recognize `chat_template_kwargs`. The benchmark Speed Test sends the same value for apples-to-apples comparison.
+- **Request body:** `{ model, messages:[{system}, {user}], temperature: 0, chat_template_kwargs: { enable_thinking }, reasoning_effort }` with **`max_tokens` omitted** (see No `max_tokens` below). `enable_thinking` mirrors the **Model Reasoning** Options toggle (`thinkingModeEnabled`, default `false`); when the toggle is off, `reasoning_effort: 'low'` is sent too — some reasoning models ignore `enable_thinking` but honor `reasoning_effort` (GLM-5.3-Flash goes from 8192 tokens / ~93s to <150 tokens / 2-4s). `'low'` rather than `'none'`: on GLM-5.3-Flash `'none'` paradoxically spikes output to the provider's 8192-token default. Models that don't recognize either field ignore them. The benchmark Speed Test sends the same value for apples-to-apples comparison.
 - **System prompt** (`SYSTEM_PROMPT1`): survival goal + instructions to respond with ONLY `up`/`down`/`left`/`right`, no thinking; placeholders `{VISIBILITY_SIZE}` → `VIEW_RADIUS * 2 + 1` and `{HINTS_DESC}` → compass-hint wording (or empty) filled at request time.
 - **Board state prompt** (`getBoardState`): player color/length/head pos, coordinate-system note ((0,0) top-left; x→right, y→down — without it LLMs' Cartesian prior makes them botch vertical moves and drift horizontally), current direction, enemy info, distance to enemy + length advantage, ASCII board view centered on head (full 30×30 OR `(VIEW_RADIUS*2+1)` square with wrap; legend `@`=head, fruits drawn as their real emoji, `R/r`/`B/b`=bodies `.`=empty), per-direction danger checks, and — if `collisionAvoidanceEnabled` — a `Safe moves:` line (plain, unordered; excludes the exact reverse direction and any colliding cell; phrased `Safe moves (answer with one word):` to restate the output contract at the decision point — otherwise small models parrot their current direction instead of grounding the compass hints). The prompt deliberately recommends NO target fruit — the LLM must pick its own goal from the FRUITS list (emoji, coordinates, value; plus toroidal distance and a wrap-aware compass hint per fruit — e.g. `(8 right, 1 down)`, dominant axis first — when the Options UI toggle `provideHintsEnabled` / "🧭 Provide Hints" is on, which it is by default; with it off the list is coordinates + value only, and the system prompt's `{HINTS_DESC}` placeholder swaps out the compass-hint wording to match). The FRUITS list itself is gated behind `const fruitGuidanceEnabled = true` (code-level toggle; a former Options checkbox was removed since the off state isn't viable — without the list, most LLMs can't read fruit positions from the board view and drift in straight lines).
-- **Content stripping:** regex `/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi` removes thinking tags before parsing the direction. Direction parse = first `\b(up|down|left|right)\b` word in the lowercased reply (tolerates "down.", "I'll go left"); if none is found the response is thrown as an API failure (which feeds the retry/forfeit machinery) rather than silently freezing the snake's move loop.
-- **Adaptive `max_tokens`:** cascade `[10, 100, 1000, null]` per player (`playerMaxTokensLevel`, starts at 0). On null/"Limited API response" or `finish_reason === 'length'`, the level advances and the request retries; `null` means the param is omitted.
+- **Content stripping:** `SnakeCore.stripThinkingTags` removes reasoning wrappers before the null-check / token estimates — paired `<(thinking|think|thought|reasoning)>…</\1>` blocks *and* orphan open/close tags (some templates, e.g. GLM-5.x, emit only `</think>` with no opening tag). `SnakeCore.parseDirectionReply` receives the raw reply and returns `up`/`down`/`left`/`right` or null: it drops wrappers, keeps only the text after the last closing marker if present, prefers a direction word introduced by an answer marker (`go`/`pick`/`answer`/`choose`/…) within the span since the previous direction mention, and otherwise falls back to the *last* mention (chatty models restate their pick at the end; a one-word reply is unchanged). If no direction is found the response is thrown as an API failure (feeding the retry/forfeit machinery) rather than silently freezing the snake's move loop.
+- **No `max_tokens`:** game moves omit the field (`GAME_MAX_TOKENS = null`) so the model finishes on its own. Reasoning models that can't disable thinking emit 1.5k–3.7k completion tokens on hard boards (DeepSeek-V4.1-Flash), which any fixed cap truncates mid-reasoning (`finish_reason: 'length'`, empty content) — an escalation ladder would waste time/tokens and the top rung can't finish within the timeout. `LLM_TIMEOUT_MS` (45s) is the wall-clock backstop; a provider-side truncation is treated as a normal failure (retry/forfeit). Anthropic's native API requires the field, so its builder substitutes a default when `maxTokens` is null.
 - **Retries:** on HTTP 429 → exponential backoff `2000 * 2^attempt`, up to `MAX_429_RETRIES = 3`. Other (non-timeout) errors retry up to `MAX_API_RETRIES = 10`. Move timeouts retry with exponential backoff (`2000 * 2^timeoutAttempt`) up to `MAX_TIMEOUT_RETRIES = 5` before stopping the game.
 - **Forfeit:** `MAX_CONSECUTIVE_FAILURES = 3` consecutive failures dispatches a `playerForfeited` event and ends the game.
 - **Fallback:** on error/invalid response, direction falls back via `findSafeDirection` (still records a latency sample).
@@ -181,12 +181,12 @@ P1 - #45: 💥 HEAD-ON COLLISION!
 | `CELL_SIZE` | 20 | px per cell (600×600 canvas) |
 | `CANVAS_WIDTH/HEIGHT` | 600 | Canvas px |
 | `NUM_FRUITS` | 3 | Fruits on board |
-| `LLM_TIMEOUT_MS` | 30000 | Per-request timeout (30s) |
+| `LLM_TIMEOUT_MS` | 45000 | Per-request timeout (45s; reasoning models can run ~28s) |
 | `API_RETRY_DELAY_MS` | 2000 | Retry delay (2s) |
 | `MAX_API_RETRIES` | 10 | Non-429 error retries |
 | `MAX_429_RETRIES` | 3 | 429 retries (exponential backoff) |
 | `MAX_CONSECUTIVE_FAILURES` | 3 | Forfeit threshold |
-| `MAX_TOKENS_CASCADE` | `[10,100,1000,null]` | Adaptive token limits |
+| `GAME_MAX_TOKENS` | `null` | Omit `max_tokens` (model decides) |
 | `MAX_LATENCY_HISTORY` | 50 | Graph samples |
 | `MAX_GLOBAL_LATENCY_HISTORY` | 1000 | Stored samples (circular) |
 | `VIEW_RADIUS` | 10 (let) | Vision radius, UI-adjustable, clamped [1,GRID_SIZE] |
@@ -230,7 +230,7 @@ P1 - #45: 💥 HEAD-ON COLLISION!
 ## Key Functions
 
 **Init / lifecycle**
-- `initializeGame()` — reset snakes/fruits/counters/latency/max_tokens levels + DOM stats.
+- `initializeGame()` — reset snakes/fruits/counters/latency + DOM stats.
 - `startGame(fromDemoMode=false)` — validate, populate legend, init, draw, start timer + animation, schedule `gameLoop()` after `turnDelay`.
 - `restartGame()` — full cleanup, clear log, debug off, init, dispatch `gameRestarted`.
 - `cleanupAllResources()` / `cleanupResources()` (alias) — stop animation/timer/countdown, clear timeouts, remove listeners, abort controller, clear latency. `cleanupGameResources()` — lighter reset used between loop rounds (keeps listeners + latency).

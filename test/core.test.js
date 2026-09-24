@@ -111,6 +111,66 @@ test('parseDirectionReply tolerates chatter', () => {
     assert.equal(Core.parseDirectionReply(null), null);
 });
 
+test('parseDirectionReply prefers the committed answer over a considered option', () => {
+    // First mention is a rejected option; the answer marker precedes the pick.
+    assert.equal(Core.parseDirectionReply("I'll go up, not down"), 'up');
+    assert.equal(Core.parseDirectionReply('Moving up is blocked, so I go down'), 'down');
+    // No marker: chatty models restate the pick last.
+    assert.equal(Core.parseDirectionReply('Should I go left or right? Up is risky. I pick right'), 'right');
+});
+
+test('parseDirectionReply ignores directions inside reasoning wrappers', () => {
+    // GLM-5.x emits an implicit opening token, so only `</think>` is present.
+    assert.equal(
+        Core.parseDirectionReply('The head is at (5,5). I could go left or down. </think>right'),
+        'right'
+    );
+    // Paired block whose reasoning mentions other directions.
+    assert.equal(
+        Core.parseDirectionReply('<thinking>Options are up and down; left is fatal.</thinking>down'),
+        'down'
+    );
+    // Discussion before the closer must not win.
+    assert.equal(
+        Core.parseDirectionReply('I considered left, then up.  up'),
+        'up'
+    );
+    // Stray trailing closer after the answer: salvage from the reply.
+    assert.equal(Core.parseDirectionReply('right</thinking>'), 'right');
+    // Answer only inside a paired block still yields nothing.
+    assert.equal(Core.parseDirectionReply('<thinking>left</thinking>'), null);
+});
+
+test('stripThinkingTags removes paired and orphan wrappers', () => {
+    assert.equal(
+        Core.stripThinkingTags('<thinking>secret left</thinking>right'),
+        'right'
+    );
+    assert.equal(Core.stripThinkingTags('reasoning...</think>up'), 'reasoning... up');
+    assert.equal(Core.stripThinkingTags('plain right'), 'plain right');
+    assert.equal(Core.stripThinkingTags(null), '');
+});
+
+test('sortByValueAsc orders by value, is stable, and does not mutate', () => {
+    const input = [
+        { name: 'Star', value: 3 },
+        { name: 'Apple', value: 1 },
+        { name: 'Grapes', value: 2 },
+        { name: 'Cherry', value: 2 },
+        { name: 'Present', value: 5 },
+        { name: 'Diamond', value: 4 },
+    ];
+    const out = Core.sortByValueAsc(input);
+    assert.deepEqual(out.map(f => f.value), [1, 2, 2, 3, 4, 5]);
+    // Ties keep their original relative order (Grapes before Cherry).
+    assert.deepEqual(out.slice(1, 3).map(f => f.name), ['Grapes', 'Cherry']);
+    // Returns a copy: the source array is untouched.
+    assert.equal(input[0].name, 'Star');
+    // Non-array input degrades to an empty list.
+    assert.deepEqual(Core.sortByValueAsc(null), []);
+});
+
+
 test('calculatePercentile interpolates', () => {
     assert.equal(Core.calculatePercentile([10, 20, 30, 40], 50), 25);
     assert.equal(Core.calculatePercentile([5], 90), 5);
@@ -174,6 +234,15 @@ test('buildChatRequest cleans per provider in one place', () => {    const msgs 
     assert.deepEqual(nebius.body.chat_template_kwargs, { enable_thinking: true });
     assert.equal(nebius.body.max_tokens, 10);
     assert.equal(nebius.body.stream, true);
+    // Thinking enabled -> no reasoning_effort override.
+    assert.ok(!('reasoning_effort' in nebius.body));
+    // Thinking off (default) -> reasoning_effort:none, and no max_tokens when unset.
+    const nebiusNoThink = Core.buildChatRequest({ apiUrl: 'https://api.tokenfactory.nebius.com/v1/', apiKey: 'k-1234567890', model: 'm', messages: msgs, temperature: 0 });
+    assert.deepEqual(nebiusNoThink.body.chat_template_kwargs, { enable_thinking: false });
+    assert.equal(nebiusNoThink.body.reasoning_effort, 'low');
+    assert.ok(!('max_tokens' in nebiusNoThink.body));
+    // OpenAI rejects unknown fields -> neither suppression field is sent.
+    assert.ok(!('reasoning_effort' in openai.body));
     const local = Core.buildChatRequest({ apiUrl: 'http://localhost:11434/v1/', apiKey: '', model: 'm', messages: msgs, temperature: 0 });
     assert.equal(local.headers['Authorization'], 'Bearer ollama');
     assert.equal(local.body.temperature, 0);

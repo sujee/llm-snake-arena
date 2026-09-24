@@ -142,3 +142,16 @@ test('latency resize drops stale hover overlays', () => {
     assert.ok(fn.includes('drawLatencyGraph(1'), 'handleResize must redraw p1 graph');
     assert.ok(fn.includes('drawLatencyGraph(2'), 'handleResize must redraw p2 graph');
 });
+
+test('fruit legend renders cheapest-first via sortByValueAsc', () => {
+    // Data stays in rarity order; display ordering is applied at render time so
+    // the two never drift out of sync.
+    const game = fs.readFileSync(path.join(root, 'js', 'game.js'), 'utf8');
+    const fnStart = game.indexOf('function buildFruitLegendRows');
+    assert.ok(fnStart !== -1, 'missing buildFruitLegendRows in js/game.js');
+    const fn = game.slice(fnStart, game.indexOf('// --- Fruit legend popover controller'));
+    assert.ok(
+        /SnakeCore\.sortByValueAsc\(FRUIT_LEGEND_INFO\)/.test(fn),
+        'buildFruitLegendRows must sort FRUIT_LEGEND_INFO cheapest-first'
+    );
+});
