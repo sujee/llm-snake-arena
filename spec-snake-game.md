@@ -13,9 +13,12 @@ A visual competitive snake battle where two LLM-controlled snakes race for survi
 ```
 snake-battle/
 ├── snake.html        # Main HTML structure
-├── style.css         # All styling and animations
-├── game.js           # Game logic, rendering, LLM + latency integration
-├── benchmark.js      # Model performance testing system
+├── assets/
+│   └── style.css     # All styling and animations
+├── js/
+│   ├── game.js       # Game logic, rendering, LLM + latency integration
+│   └── benchmark.js  # Model performance testing system
+├── test/             # Tests
 ├── README.md         # User documentation
 ├── CLAUDE.md         # Development guidelines for AI assistants
 └── spec-snake-game.md # This file
@@ -169,7 +172,7 @@ P1 - #45: 💥 HEAD-ON COLLISION!
 | Visibility Radius | 10 | 1–30 | Snake vision radius in cells (30 = full grid) |
 | Loop Mode | on | on/off | Auto-restart with 5s countdown |
 
-### Hardcoded constants (`game.js`)
+### Hardcoded constants (`js/game.js`)
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `GRID_SIZE` | 30 | Board (30×30 = 900 cells) |
@@ -258,7 +261,7 @@ P1 - #45: 💥 HEAD-ON COLLISION!
 
 ## Custom DOM Events
 
-Dispatched on `document` (consumed by an external demo/tournament harness; `game.js` only dispatches — except `startGame` checks `window.demoMode?.shouldInterceptStartBattle()`):
+Dispatched on `document` (consumed by an external demo/tournament harness; `js/game.js` only dispatches — except `startGame` checks `window.demoMode?.shouldInterceptStartBattle()`):
 
 | Event | Dispatched from | `detail` |
 |-------|-----------------|----------|

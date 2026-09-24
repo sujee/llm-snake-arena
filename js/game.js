@@ -486,7 +486,7 @@ function buildFruitLegendRows(container) {
 }
 
 // --- Fruit legend popover controller -------------------------------------
-// Mirrors the benchmark sort flyout lifecycle (benchmark.js sortModelsBySpeed /
+// Mirrors the benchmark sort flyout lifecycle (js/benchmark.js sortModelsBySpeed /
 // _closeSortMenu / _positionSortMenu): a position:fixed <div> appended to
 // <body>, pinned to the trigger button, with outside-click + Escape dismiss
 // and scroll/resize repositioning. Full listener teardown on close.
@@ -573,7 +573,7 @@ function closeFruitLegendPopover() {
  * Pin the popover just below the trigger button, left-aligned to it. Flips to
  * the right side if there's no room on the left, and clamps vertically so a
  * long popover never runs off the bottom of the viewport. Mirrors the edge
- * logic in _positionSortMenu (benchmark.js). Uses fixed coords so it isn't
+ * logic in _positionSortMenu (js/benchmark.js). Uses fixed coords so it isn't
  * affected by page scroll.
  */
 function positionFruitLegendPopover() {

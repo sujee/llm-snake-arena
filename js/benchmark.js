@@ -1282,7 +1282,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Access availableModels from game.js
+            // Access availableModels from js/game.js
             if (typeof availableModels === 'undefined' || availableModels.length === 0) {
                 console.error('❌ No models loaded. Please load models first.');
                 alert('Please load models first by clicking "Load Models"');

@@ -99,7 +99,7 @@ Go to : http://localhost:8000/snake.html
 
 ## Customization
 
-You can modify the game by editing `game.js`:
+You can modify the game by editing `js/game.js`:
 
 ```javascript
 const GRID_SIZE = 30;                 // Board dimensions (30×30). Try 20 for faster games, 40 for more space
@@ -145,7 +145,7 @@ Tested with Nebius Token Factory but should work with others (OpenAI, compatible
 **Game too slow/fast:**
 - Game speed is determined by model response times — faster models move more often
 - Try a faster model for comparison (the move counters and latency graph make speed differences visible)
-- Smaller grid sizes (edit `GRID_SIZE` in game.js) result in quicker games
+- Smaller grid sizes (edit `GRID_SIZE` in js/game.js) result in quicker games
 
 **One snake barely moves:**
 - That model is slow to respond — it will move less frequently (intended behavior)
