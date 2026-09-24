@@ -22,7 +22,7 @@ snake-battle/
 ├── test/
 │   └── core.test.js  # `node --test test/` — 15 tests, zero deps
 ├── README.md         # User documentation
-├── CLAUDE.md         # Development guidelines for AI assistants
+├── AGENTS.md          # Contributor rules for AI assistants
 └── spec-snake-game.md # This file
 ```
 
