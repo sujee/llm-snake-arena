@@ -913,8 +913,38 @@ function tagProvider(models, providerNum) {
 }
 
 // Fetch + filter + sort models for ONE provider (verbose→standard fallback).
+// Anthropic uses its native `/v1/models` endpoint with x-api-key auth.
 // Returns { models, total }. Throws on failure; caller adds provider context.
 async function fetchProviderModels(apiUrl, apiKey) {
+    if (SnakeCore.isAnthropicEndpoint(apiUrl)) {
+        let response;
+        try {
+            const req = SnakeCore.getAnthropicModelsRequest(apiUrl, apiKey);
+            response = await fetch(req.url, { method: 'GET', headers: req.headers, credentials: 'omit' });
+        } catch (networkError) {
+            throw new Error(SnakeCore.describeFetchFailure(apiUrl, networkError));
+        }
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        let data;
+        try {
+            data = JSON.parse(await response.text());
+        } catch (jsonError) {
+            throw new Error(`Invalid JSON response: ${jsonError.message}`);
+        }
+        const allModels = data.data || [];
+        if (allModels.length === 0) {
+            throw new Error('No models found in API response');
+        }
+        const models = filterTextModels(allModels);
+        if (models.length === 0) {
+            throw new Error('No text-to-text models found in API response');
+        }
+        models.sort(sortModelsById);
+        return { models, total: allModels.length };
+    }
+
     let response;
     let data = null;
 
@@ -990,6 +1020,22 @@ async function loadModels() {
     loadingDiv.classList.remove('hidden');
 
     try {
+        // Provider 1: native Anthropic path reuses fetchProviderModels
+        // (x-api-key auth, no verbose endpoint). OpenAI-compatible path
+        // keeps the verbose→standard fallback below.
+        let allModels;
+        let p1TotalDisplay = 0;
+        if (SnakeCore.isAnthropicEndpoint(apiUrl)) {
+            const p1 = await fetchProviderModels(apiUrl, apiKey);
+            availableModelsP1 = tagProvider(p1.models, 1);
+            if (availableModelsP1.length === 0) {
+                throw new Error('No text-to-text models found in API response');
+            }
+            availableModelsP1.sort(sortModelsById);
+            console.log(`✅ Loaded ${availableModelsP1.length} text-to-text models (filtered from ${p1.total} total)`);
+            allModels = p1.models;
+            p1TotalDisplay = p1.total;
+        } else {
         let response;
         let data;
         let hasVerboseData = false;
@@ -1071,7 +1117,8 @@ async function loadModels() {
             hasVerboseData = false;
         }
 
-        let allModels = data.data || [];
+        allModels = data.data || [];
+        p1TotalDisplay = allModels.length;
 
         if (allModels.length === 0) {
             throw new Error('No models found in API response');
@@ -1098,6 +1145,7 @@ async function loadModels() {
         availableModelsP1.sort(sortModelsById);
 
         console.log(`✅ Loaded ${availableModelsP1.length} text-to-text models (filtered from ${allModels.length} total)`);
+        } // end OpenAI-compatible Provider 1 path
 
         // Provider 2: same list when sharing, otherwise its own fetch.
         let p2Total = allModels.length;
@@ -1129,7 +1177,7 @@ async function loadModels() {
         // Show how many models loaded (text-to-text, filtered from total)
         if (modelsLoadedCount) {
             modelsLoadedCount.textContent = same
-                ? `✓ Loaded ${availableModelsP1.length} models (of ${allModels.length} total)`
+                ? `✓ Loaded ${availableModelsP1.length} models (of ${p1TotalDisplay || allModels.length} total)`
                 : `✓ Loaded ${availableModelsP1.length} (P1) + ${availableModelsP2.length} (P2) models`;
             modelsLoadedCount.classList.remove('hidden');
         }
@@ -2580,20 +2628,36 @@ async function getLLMDirection(playerNum, maxTokens = null) {
     try {
         // Credentials up front; the shared builder cleans per provider.
         const creds = getPlayerCredentials(playerNum);
-        const { url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildChatRequest({
+        const systemPrompt = SYSTEM_PROMPT
+            .replace('{VISIBILITY_SIZE}', VIEW_RADIUS * 2 + 1)
+            // {HINTS_DESC} mirrors the provideHintsEnabled toggle so the
+            // system prompt never describes hints the user prompt lacks.
+            .replace('{HINTS_DESC}', provideHintsEnabled
+                ? ', distance and compass hint (e.g. "8 right, 1 down") — to move toward a fruit, answer with a word from its compass hint'
+                : '');
+        const isAnthropic = SnakeCore.isAnthropicEndpoint(creds.apiUrl);
+        let requestUrl;
+        let requestHeaders;
+        let requestBody;
+        if (isAnthropic) {
+            // Native Anthropic: system is top-level, messages are user-only.
+            ({ url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildAnthropicRequest({
+                apiUrl: creds.apiUrl,
+                apiKey: creds.apiKey,
+                model: model,
+                system: systemPrompt,
+                messages: [{ role: 'user', content: prompt }],
+                maxTokens: maxTokens
+            }));
+        } else {
+        const { url: openaiUrl, headers: openaiHeaders, body: openaiBody } = SnakeCore.buildChatRequest({
             apiUrl: creds.apiUrl,
             apiKey: creds.apiKey,
             model: model,
             messages: [
                 {
                     role: 'system',
-                    content: SYSTEM_PROMPT
-                        .replace('{VISIBILITY_SIZE}', VIEW_RADIUS * 2 + 1)
-                        // {HINTS_DESC} mirrors the provideHintsEnabled toggle so the
-                        // system prompt never describes hints the user prompt lacks.
-                        .replace('{HINTS_DESC}', provideHintsEnabled
-                            ? ', distance and compass hint (e.g. "8 right, 1 down") — to move toward a fruit, answer with a word from its compass hint'
-                            : '')
+                    content: systemPrompt
                 },
                 {
                     role: 'user',
@@ -2604,6 +2668,10 @@ async function getLLMDirection(playerNum, maxTokens = null) {
             maxTokens: maxTokens,
             thinkingEnabled: thinkingModeEnabled
         });
+            requestUrl = openaiUrl;
+            requestHeaders = openaiHeaders;
+            requestBody = openaiBody;
+        }
 
         // Calculate request size for logging
         const requestBodyString = JSON.stringify(requestBody);
@@ -2625,17 +2693,19 @@ async function getLLMDirection(playerNum, maxTokens = null) {
         if (gameState.debugMode) {
             console.log(`[${formatTimestamp(new Date(startTime))}] ======== P${playerNum}: Move ${playerMove}: Request ${requestNum} (${requestBytes} bytes, ~${requestTokens} tokens) ======`);
             console.log('URL:', requestUrl);
-            console.log('Headers:', {
+            console.log('Headers:', isAnthropic
+                ? { 'Content-Type': 'application/json', 'x-api-key': '***HIDDEN***' }
+                : {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ***HIDDEN***'
             });
             // Print metadata + prompts human-readably (real newlines; the raw
             // JSON Body dump escaped every \n and made prompts unreadable).
-            console.log(`Model: ${model} | temp: 0 | max_tokens: ${maxTokens === null ? 'omitted' : maxTokens} | thinking: ${thinkingModeEnabled}`);
+            console.log(`Model: ${model} | temp: 0 | max_tokens: ${maxTokens === null ? (isAnthropic ? '300 (anthropic default)' : 'omitted') : maxTokens} | thinking: ${thinkingModeEnabled}`);
             console.log('--- System prompt ---');
-            console.log(requestBody.messages[0].content);
+            console.log(isAnthropic ? (requestBody.system || '') : requestBody.messages[0].content);
             console.log('--- User prompt ---');
-            console.log(requestBody.messages[1].content);
+            console.log(isAnthropic ? (requestBody.messages[0].content) : requestBody.messages[1].content);
             console.log('--------------------');
             console.log('Body (raw JSON):', JSON.stringify(requestBody, null, 2));
         }
@@ -2661,7 +2731,25 @@ async function getLLMDirection(playerNum, maxTokens = null) {
         const endTime = Date.now();
         const latency = endTime - startTime;
 
-        const data = await response.json();
+        let data;
+        let content;
+        let isNullContent;
+        let isLengthLimited;
+        let finishReason;
+        if (isAnthropic) {
+            data = await response.json();
+            if (!response.ok) {
+                const detail = data && data.error ? (data.error.message || data.error.type) : response.statusText;
+                throw new Error(`HTTP ${response.status}: ${detail || response.statusText}`);
+            }
+            content = SnakeCore.parseAnthropicText(data);
+            // Strip out any thinking/reasoning tags and their content
+            content = content.replace(/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi, '').trim();
+            isNullContent = !content;
+            isLengthLimited = data.stop_reason === 'max_tokens';
+            finishReason = data.stop_reason || 'unknown';
+        } else {
+        data = await response.json();
 
         // Check if response contains an error
         if (data.error) {
@@ -2673,10 +2761,11 @@ async function getLLMDirection(playerNum, maxTokens = null) {
             throw new Error('Invalid response: No choices in API response');
         }
 
-        let content = data.choices[0]?.message?.content?.trim() || '';
+        content = data.choices[0]?.message?.content?.trim() || '';
 
         // Strip out any thinking/reasoning tags and their content
         content = content.replace(/<(thinking|think|thought|reasoning)>[\s\S]*?<\/\1>/gi, '').trim();
+        }
 
         const choice = content.toLowerCase();
 
@@ -2684,11 +2773,14 @@ async function getLLMDirection(playerNum, maxTokens = null) {
         // ("down.", "\"Up\"", "I'll go left"). See SnakeCore.parseDirectionReply.
         const directionWord = SnakeCore.parseDirectionReply(choice);
 
+        if (!isAnthropic) {
         // Check if content is null
-        const isNullContent = !data.choices || !data.choices[0] || !data.choices[0].message || data.choices[0].message.content === null;
+        isNullContent = !data.choices || !data.choices[0] || !data.choices[0].message || data.choices[0].message.content === null;
 
         // Check if response was cut off due to length limit
-        const isLengthLimited = data.choices?.[0]?.finish_reason === 'length';
+        isLengthLimited = data.choices?.[0]?.finish_reason === 'length';
+        finishReason = data.choices?.[0]?.finish_reason || 'unknown';
+        }
 
         // Calculate response length (bytes) from full API response
         const responseLength = new Blob([JSON.stringify(data)]).size;
@@ -2709,19 +2801,20 @@ async function getLLMDirection(playerNum, maxTokens = null) {
                     console.warn('⚠️ LENGTH-LIMITED RESPONSE DETECTED!');
                 }
                 console.warn('Full Response:', JSON.stringify(data, null, 2));
-                if (data.choices && data.choices[0]) {
+                if (isAnthropic) {
+                    console.warn('stop_reason:', data.stop_reason);
+                } else if (data.choices && data.choices[0]) {
                     console.warn('finish_reason:', data.choices[0].finish_reason);
                     console.warn('message:', JSON.stringify(data.choices[0].message, null, 2));
                 }
             } else {
                 console.log('Choice:', choice);
-                console.log('finish_reason:', data.choices[0]?.finish_reason);
+                console.log(isAnthropic ? 'stop_reason:' : 'finish_reason:', isAnthropic ? data.stop_reason : data.choices[0]?.finish_reason);
             }
         }
 
         // Throw error for null content or length-limited responses so they're counted as failures and retried with higher max_tokens
         if (isNullContent || isLengthLimited) {
-            const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
             throw new Error(`Limited API response (finish_reason: ${finishReason})`);
         }
 

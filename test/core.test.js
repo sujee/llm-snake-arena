@@ -204,7 +204,66 @@ test('getProviderPresets lists known providers with URLs', () => {
     assert.equal(byId['openai'].url, 'https://api.openai.com/v1/');
     assert.equal(byId['together'].url, 'https://api.together.xyz/v1/');
     assert.equal(byId['ollama-local'].url, 'http://localhost:11434/v1/');
-    assert.equal(byId['anthropic'].url, '');
+    assert.equal(byId['anthropic'].url, 'https://api.anthropic.com/');
     assert.equal(byId['custom'].url, '');
     assert.equal(byId['openai'].url, 'https://api.openai.com/v1/');
+});
+
+test('isAnthropicEndpoint detects Anthropic hosts', () => {
+    assert.equal(Core.isAnthropicEndpoint('https://api.anthropic.com/'), true);
+    assert.equal(Core.isAnthropicEndpoint('https://api.anthropic.com/v1/'), true);
+    assert.equal(Core.isAnthropicEndpoint('https://api.openai.com/v1/'), false);
+    assert.equal(Core.isAnthropicEndpoint('https://api.tokenfactory.nebius.com/v1/'), false);
+    assert.equal(Core.isAnthropicEndpoint('not a url'), false);
+    assert.equal(Core.isAnthropicEndpoint(''), false);
+});
+
+test('getAnthropicBase strips version segment', () => {
+    assert.equal(Core.getAnthropicBase('https://api.anthropic.com/'), 'https://api.anthropic.com/');
+    assert.equal(Core.getAnthropicBase('https://api.anthropic.com/v1/'), 'https://api.anthropic.com/');
+    assert.equal(Core.getAnthropicBase('https://api.anthropic.com/v1'), 'https://api.anthropic.com/');
+    assert.equal(Core.getAnthropicBase(''), '');
+});
+
+test('buildAnthropicRequest uses native shape with required max_tokens', () => {
+    const r = Core.buildAnthropicRequest({
+        apiUrl: 'https://api.anthropic.com/', apiKey: 'sk-ant-test-12345', model: 'claude-sonnet-4-20250514',
+        system: 'sys', messages: [{ role: 'user', content: 'hi' }], temperature: 0, maxTokens: 10
+    });
+    assert.equal(r.url, 'https://api.anthropic.com/v1/messages');
+    assert.equal(r.headers['x-api-key'], 'sk-ant-test-12345');
+    assert.equal(r.headers['anthropic-version'], Core.ANTHROPIC_API_VERSION);
+    assert.equal(r.headers['anthropic-dangerous-direct-browser-access'], 'true');
+    assert.equal(r.body.model, 'claude-sonnet-4-20250514');
+    assert.equal(r.body.max_tokens, 10);
+    assert.equal(r.body.system, 'sys');
+    assert.deepEqual(r.body.messages, [{ role: 'user', content: 'hi' }]);
+    assert.ok(!('temperature' in r.body));
+    // null max_tokens (game cascade end) must still satisfy Anthropic's required field
+    const def = Core.buildAnthropicRequest({
+        apiUrl: 'https://api.anthropic.com/v1/', apiKey: 'k', model: 'm',
+        messages: [{ role: 'user', content: 'hi' }], maxTokens: null
+    });
+    assert.equal(def.url, 'https://api.anthropic.com/v1/messages');
+    assert.equal(def.body.max_tokens, 300);
+    const streamed = Core.buildAnthropicRequest({
+        apiUrl: 'https://api.anthropic.com/', apiKey: 'k', model: 'm',
+        messages: [{ role: 'user', content: 'hi' }], stream: true
+    });
+    assert.equal(streamed.body.stream, true);
+});
+
+test('getAnthropicModelsRequest targets native models endpoint', () => {
+    const req = Core.getAnthropicModelsRequest('https://api.anthropic.com/v1/', 'sk-ant-test-12345');
+    assert.equal(req.url, 'https://api.anthropic.com/v1/models');
+    assert.equal(req.headers['x-api-key'], 'sk-ant-test-12345');
+    assert.equal(req.headers['anthropic-version'], Core.ANTHROPIC_API_VERSION);
+});
+
+test('parseAnthropicText joins text blocks and rejects errors', () => {
+    assert.equal(Core.parseAnthropicText({ content: [{ type: 'text', text: '  left ' }] }), 'left');
+    assert.equal(Core.parseAnthropicText({ content: [{ type: 'text', text: 'go ' }, { type: 'tool_use', id: 'x' }, { type: 'text', text: 'up' }] }), 'go up');
+    assert.throws(() => Core.parseAnthropicText({ type: 'error', error: { type: 'auth', message: 'bad key' } }), /bad key/);
+    assert.throws(() => Core.parseAnthropicText({ error: { message: 'boom' } }), /boom/);
+    assert.throws(() => Core.parseAnthropicText(null), /Invalid response/);
 });

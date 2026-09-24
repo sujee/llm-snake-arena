@@ -223,6 +223,76 @@
         }
     }
 
+    // Anthropic's native API uses x-api-key (not Bearer) plus a version
+    // header. Direct browser calls additionally require the
+    // `anthropic-dangerous-direct-browser-access` header; without it the
+    // endpoint blocks cross-origin requests.
+    const ANTHROPIC_API_VERSION = '2023-06-01';
+
+    function isAnthropicEndpoint(apiUrl) {
+        try {
+            const host = new URL(apiUrl).hostname.toLowerCase();
+            return host === 'api.anthropic.com' || host.endsWith('.anthropic.com');
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // Accepts both `https://api.anthropic.com/` and `.../v1/` inputs and
+    // returns the origin base with trailing slash, so callers can append
+    // `v1/messages` / `v1/models` without doubling the version segment.
+    function getAnthropicBase(apiUrl) {
+        let s = (apiUrl || '').trim().replace(/\/+$/, '');
+        if (/\/v1$/i.test(s)) s = s.slice(0, -3);
+        if (!s) return '';
+        return s + '/';
+    }
+
+    function buildAnthropicRequest({ apiUrl, apiKey, model, system, messages, maxTokens = null, stream = false }) {
+        const base = getAnthropicBase(apiUrl);
+        const url = `${base}v1/messages`;
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey || '',
+            'anthropic-version': ANTHROPIC_API_VERSION,
+            'anthropic-dangerous-direct-browser-access': 'true'
+        };
+        // max_tokens is required by Anthropic; the game's cascade ends with
+        // null (omit for OpenAI), so substitute a small safe default.
+        // temperature is intentionally never sent (Anthropic default).
+        const body = { model, max_tokens: (maxTokens === null || maxTokens === undefined) ? 300 : maxTokens };
+        if (system) body.system = system;
+        if (messages) body.messages = messages;
+        if (stream) body.stream = true;
+        return { url, headers, body };
+    }
+
+    function getAnthropicModelsRequest(apiUrl, apiKey) {
+        const base = getAnthropicBase(apiUrl);
+        return {
+            url: `${base}v1/models`,
+            headers: {
+                'x-api-key': apiKey || '',
+                'anthropic-version': ANTHROPIC_API_VERSION,
+                'anthropic-dangerous-direct-browser-access': 'true'
+            }
+        };
+    }
+
+    // Extracts plain text from a native Anthropic messages response
+    // (`{ content: [{ type: 'text', text }] }`). Throws on API errors so
+    // callers share the retry/forfeit path with OpenAI errors.
+    function parseAnthropicText(data) {
+        if (!data || typeof data !== 'object') throw new Error('Invalid response: empty Anthropic reply');
+        if (data.type === 'error' || data.error) {
+            const err = data.error || {};
+            throw new Error(`API Error: ${err.message || err.type || JSON.stringify(data.error)}`);
+        }
+        const blocks = Array.isArray(data.content) ? data.content : [];
+        const text = blocks.filter(b => b && b.type === 'text' && typeof b.text === 'string').map(b => b.text).join('');
+        return (text || '').trim();
+    }
+
     // OpenAI's API rejects unknown body fields like chat_template_kwargs,
     // so the thinking param must be omitted for OpenAI endpoints.
     function isOpenAIEndpoint(apiUrl) {
@@ -283,17 +353,17 @@
         return isLocalBaseUrl(apiUrl) ? 'ollama' : '';
     }
 
-    // Well-known OpenAI-compatible providers. `url: ''` means "no safe
-    // default" (Anthropic's native API is not OpenAI-compatible; Custom is
-    // user-supplied). Key requirement is relaxed for local URLs (see above).
+    // Well-known providers. Anthropic now uses its native API
+    // (`/v1/messages`, `/v1/models` with x-api-key); everything else stays
+    // OpenAI-compatible. Key requirement is relaxed for local URLs (see above).
     function getProviderPresets() {
         return [
             { id: 'nebius', label: 'Nebius Token Factory', url: 'https://api.tokenfactory.nebius.com/v1/', note: '' },
             { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1/', note: '' },
+            { id: 'anthropic', label: 'Anthropic (native)', url: 'https://api.anthropic.com/', note: 'Native Anthropic API — key is visible in browser devtools.' },
             { id: 'together', label: 'Together AI', url: 'https://api.together.xyz/v1/', note: '' },
             { id: 'ollama-cloud', label: 'Ollama Cloud', url: 'https://ollama.com/v1/', note: '' },
             { id: 'ollama-local', label: 'Ollama Local', url: 'http://localhost:11434/v1/', note: 'Local Ollama needs no API key — leave it blank.' },
-            { id: 'anthropic', label: 'Anthropic', url: '', note: 'Anthropic has no OpenAI-compatible endpoint — point the URL at an OpenAI-compatible proxy.', warn: true },
             { id: 'custom', label: 'Custom', url: '', note: '' },
         ];
     }
@@ -320,6 +390,12 @@
         resolvePlayerCredentials,
         isLocalBaseUrl,
         isOpenAIEndpoint,
+        isAnthropicEndpoint,
+        getAnthropicBase,
+        buildAnthropicRequest,
+        getAnthropicModelsRequest,
+        parseAnthropicText,
+        ANTHROPIC_API_VERSION,
         describeFetchFailure,
         buildChatRequest,
         effectiveApiKey,

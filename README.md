@@ -127,6 +127,8 @@ Works with any OpenAI-compatible API that supports:
 - `POST /chat/completions` endpoint
 - Standard message format
 
+Plus native Anthropic (`Anthropic (native)` preset → `https://api.anthropic.com/`): `GET /v1/models` + `POST /v1/messages` with `x-api-key` auth, called directly from the browser.
+
 Tested with Nebius Token Factory but should work with others (OpenAI, compatible proxies, Ollama, LM Studio). Models are filtered by **output modality**: any model that produces text output is included (so vision-capable text LLMs like `moonshotai/Kimi-K2.6` are selectable), while pure image/audio generation models are excluded.
 
 ## Troubleshooting

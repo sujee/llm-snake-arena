@@ -908,7 +908,20 @@ class ModelBenchmark {
         const startTime = performance.now();
 
         try {
-            const { url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildChatRequest({
+            const isAnthropic = SnakeCore.isAnthropicEndpoint(apiUrl);
+            let requestUrl;
+            let requestHeaders;
+            let requestBody;
+            if (isAnthropic) {
+                ({ url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildAnthropicRequest({
+                    apiUrl, apiKey, model: modelName,
+                    system: systemPrompt,
+                    messages: [{ role: 'user', content: userPrompt }],
+                    maxTokens: 64,
+                    stream: true
+                }));
+            } else {
+            const { url: openaiUrl, headers: openaiHeaders, body: openaiBody } = SnakeCore.buildChatRequest({
                 apiUrl, apiKey, model: modelName,
                 messages: [
                     { role: 'system', content: systemPrompt },
@@ -918,6 +931,10 @@ class ModelBenchmark {
                 stream: true,
                 thinkingEnabled
             });
+                requestUrl = openaiUrl;
+                requestHeaders = openaiHeaders;
+                requestBody = openaiBody;
+            }
             const response = await fetch(requestUrl, {
                 method: 'POST',
                 headers: requestHeaders,
@@ -1007,7 +1024,10 @@ class ModelBenchmark {
         try { chunk = JSON.parse(payload); }
         catch { return false; }
         const delta = chunk?.choices?.[0]?.delta?.content;
-        return typeof delta === 'string' && delta.length > 0;
+        if (typeof delta === 'string' && delta.length > 0) return true;
+        // Native Anthropic stream: data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
+        const anthropicText = chunk?.delta?.text;
+        return typeof anthropicText === 'string' && anthropicText.length > 0;
     }
 
     async performUUIDRequest(apiUrl, apiKey, modelName, thinkingEnabled = false) {
@@ -1044,7 +1064,19 @@ class ModelBenchmark {
 
             // Race between the actual fetch and the timeout
             try {
-                const { url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildChatRequest({
+                const isAnthropic = SnakeCore.isAnthropicEndpoint(apiUrl);
+                let requestUrl;
+                let requestHeaders;
+                let requestBody;
+                if (isAnthropic) {
+                    ({ url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildAnthropicRequest({
+                        apiUrl, apiKey, model: modelName,
+                        system: systemPrompt,
+                        messages: [{ role: 'user', content: userPrompt }],
+                        maxTokens: 300
+                    }));
+                } else {
+                const { url: openaiUrl, headers: openaiHeaders, body: openaiBody } = SnakeCore.buildChatRequest({
                     apiUrl, apiKey, model: modelName,
                     messages: [
                         { role: 'system', content: systemPrompt },
@@ -1053,6 +1085,10 @@ class ModelBenchmark {
                     temperature: 0.1,
                     thinkingEnabled
                 });
+                    requestUrl = openaiUrl;
+                    requestHeaders = openaiHeaders;
+                    requestBody = openaiBody;
+                }
                 const response = await Promise.race([
                     fetch(requestUrl, {
                         method: 'POST',
@@ -1080,7 +1116,12 @@ class ModelBenchmark {
                 }
 
                 const data = await response.json();
-                const modelResponse = data.choices?.[0]?.message?.content?.trim() || '';
+                let modelResponse = '';
+                try {
+                    modelResponse = isAnthropic ? SnakeCore.parseAnthropicText(data) : (data.choices?.[0]?.message?.content?.trim() || '');
+                } catch (parseError) {
+                    return { success: false, latency: latency, correct: false, error: parseError.message };
+                }
 
                 // Check if the response matches the target UUID
                 const targetUUID = uuids[targetLine - 1];
