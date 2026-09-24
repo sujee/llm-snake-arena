@@ -1,236 +1,267 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Snake Battle</title>
-    <link rel="stylesheet" href="assets/style.css">
+    <title>LLM Snake Arena</title>
+    <link rel="stylesheet" href="assets/style.css?v=15">
+    <script>
+    // Apply saved theme before first paint (avoids dark->light flash).
+    (function () {
+        try {
+            var t = localStorage.getItem('snake-arena-theme');
+            if (!t) t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+        } catch (e) { /* private mode: stay dark */ }
+    })();
+    </script>
 </head>
 <body>
-    <div class="main-container">
-        <!-- Left Pane: Configuration Panel -->
-        <div class="left-pane">
-            <div class="left-pane-inner">
-                <div class="config-pane">
+    <!-- Top command bar: brand + status + utilities -->
+    <header class="topbar">
+        <div class="topbar-logo">S</div>
+        <h1 class="topbar-title">🐍 <span class="grad">LLM Snake Arena</span></h1>
+        <span class="pill">● LIVE</span>
+        <div class="topbar-spacer"></div>
+        <button type="button" id="fruit-legend-btn" class="iconbtn"
+                aria-expanded="false" aria-haspopup="true" title="Fruit legend"
+                aria-label="Fruit legend">
+            🍎
+        </button>
+        <button type="button" id="theme-toggle-btn" class="iconbtn"
+                title="Switch to light theme" aria-label="Switch to light theme" aria-pressed="false">
+            <span id="theme-toggle-icon" aria-hidden="true">🌙</span>
+        </button>
+    </header>
 
-                <!-- API Configuration Section -->
-                <div class="config-section">
-                    <div class="input-group">
-                        <label for="api-url">API URL</label>
-                        <input type="text" id="api-url" value="https://api.tokenfactory.nebius.com/v1/" placeholder="Enter API URL">
-                    </div>
-                    <div class="input-group">
-                        <label for="api-key">API Key</label>
-                        <input type="password" id="api-key" placeholder="Paste your API key here">
-                    </div>
-                    <button id="load-models-btn" class="btn btn-primary">
-                        <span class="btn-icon">⚡</span>
-                        Load Models
+    <div class="arena-layout">
+        <!-- Left rail: setup -->
+        <div class="rail">
+            <div class="card collapsible-section" id="connection-section">
+                <div class="section-header">
+                    <button class="collapse-toggle" data-section="connection-section" title="Toggle Connection">
+                        <span class="collapse-icon">▼</span>
                     </button>
-                    <div id="models-loaded-count" class="models-loaded-count hidden"></div>
-                    <div id="loading" class="loading hidden">
-                        <div class="spinner"></div>
-                        <span>Loading models...</span>
+                    <h3 class="section-title">Connection</h3>
+                </div>
+                <div class="section-content" id="connection-content">
+                <div class="prov-head">Provider 1 <span class="provtag p1tag">P1</span></div>
+                <div class="inline-group">
+                    <select id="provider-1-preset" class="preset-select" aria-label="Provider 1 preset"></select>
+                    <div class="preset-note" id="provider-1-note" hidden></div>
+                </div>
+                <div class="prov-grid inline-group">
+                    <input type="text" id="api-url-1" value="https://api.tokenfactory.nebius.com/v1/" placeholder="API URL" aria-label="Provider 1 API URL">
+                    <input type="password" id="api-key-1" placeholder="API key" aria-label="Provider 1 API key">
+                </div>
+                <label class="toggle-check">
+                    <input type="checkbox" id="same-provider-checkbox" checked>
+                    <span>Use same provider for both players</span>
+                </label>
+                <details class="prov2" id="provider-2-details">
+                    <summary class="prov-head">Provider 2 <span class="provtag p2tag">P2</span><span class="prov2state" id="provider-2-state">· same as Provider 1</span></summary>
+                    <div id="provider-2-block">
+                        <div class="inline-group">
+                            <select id="provider-2-preset" class="preset-select" aria-label="Provider 2 preset"></select>
+                            <div class="preset-note" id="provider-2-note" hidden></div>
+                        </div>
+                        <div class="prov-grid inline-group">
+                            <input type="text" id="api-url-2" placeholder="API URL" aria-label="Provider 2 API URL">
+                            <input type="password" id="api-key-2" placeholder="API key" aria-label="Provider 2 API key">
+                        </div>
                     </div>
-                    <div id="error-message" class="error hidden"></div>
+                </details>
+                </div>
+                <button id="load-models-btn" class="btn btn-primary">
+                    <span class="btn-icon">⚡</span>
+                    Load Models
+                </button>
+                <div id="models-loaded-count" class="models-loaded-count hidden"></div>
+                <div id="loading" class="loading hidden">
+                    <div class="spinner"></div>
+                    <span>Loading models...</span>
+                </div>
+                <div id="error-message" class="error hidden"></div>
+            </div>
+
+            <div class="card" id="model-selection">
+                <h2>Matchup</h2>
+                <div class="player-model-section">
+                    <div class="player-label"><span class="player-dot red"></span>Player 1 · Red Snake</div>
+                    <div class="searchable-dropdown">
+                        <div class="searchable-dropdown-input-wrapper">
+                            <input type="text" id="player1-model-search" class="model-search-input"
+                                   placeholder="Search or select a model..."
+                                   autocomplete="off">
+                            <span class="dropdown-arrow">▼</span>
+                        </div>
+                        <div class="dropdown-options hidden" id="player1-model-options"></div>
+                    </div>
+                    <div class="model-src" id="p1-src">↳ Provider 1</div>
                 </div>
 
-                <!-- Model Selection Section -->
-                <div id="model-selection" class="config-section">
-                    <div class="player-model-section">
-                        <div class="player-label">🔴 Player 1 (Red Snake)</div>
-                        <div class="searchable-dropdown">
-                            <div class="searchable-dropdown-input-wrapper">
-                                <input type="text" id="player1-model-search" class="model-search-input"
-                                       placeholder="Search or select a model..."
-                                       autocomplete="off">
-                                <span class="dropdown-arrow">▼</span>
-                            </div>
-                            <div class="dropdown-options hidden" id="player1-model-options"></div>
+                <div class="player-model-section">
+                    <div class="player-label"><span class="player-dot blue"></span>Player 2 · Blue Snake</div>
+                    <div class="searchable-dropdown">
+                        <div class="searchable-dropdown-input-wrapper">
+                            <input type="text" id="player2-model-search"
+                                   class="model-search-input"
+                                   placeholder="Search or select a model..."
+                                   autocomplete="off">
+                            <span class="dropdown-arrow">▼</span>
                         </div>
+                        <div class="dropdown-options hidden" id="player2-model-options"></div>
                     </div>
-
-                    <div class="player-model-section">
-                        <div class="player-label">🔵 Player 2 (Blue Snake)</div>
-                        <div class="searchable-dropdown">
-                            <div class="searchable-dropdown-input-wrapper">
-                                <input type="text" id="player2-model-search"
-                                       class="model-search-input"
-                                       placeholder="Search or select a model..."
-                                       autocomplete="off">
-                                <span class="dropdown-arrow">▼</span>
-                            </div>
-                            <div class="dropdown-options hidden" id="player2-model-options"></div>
-                        </div>
-                    </div>
+                    <div class="model-src" id="p2-src">↳ Provider 1 (same)</div>
                 </div>
 
-                <!-- Game Controls Section -->
-                <div class="config-section game-controls-section">
-                    <div class="game-control-bar">
-                        <button id="start-battle-btn" class="btn btn-success btn-small" title="Start a new game">
-                            Start
-                        </button>
-                        <button id="pause-btn" class="btn btn-control btn-small" title="Pause the current game">
-                            <span class="btn-icon">⏸️</span>
-                        </button>
-                        <button id="restart-btn" class="btn btn-control btn-small" title="Restart the current game">
-                            <span class="btn-icon">🔄</span>
-                        </button>
-                        <label class="debug-checkbox-wrapper debug-compact">
-                            <input type="checkbox" id="loop-checkbox" checked>
-                            <span class="debug-checkbox-label">Loop</span>
-                        </label>
-                    </div>
+                <div class="controls-row">
+                    <button id="start-battle-btn" class="btn btn-success btn-small" title="Start a new game">
+                        Start
+                    </button>
+                    <button id="pause-btn" class="btn btn-control btn-small" title="Pause the current game">
+                        Pause
+                    </button>
+                    <button id="restart-btn" class="btn btn-control btn-small" title="Restart the current game">
+                        Restart
+                    </button>
+                    <label class="debug-checkbox-wrapper debug-compact loop-inline">
+                        <input type="checkbox" id="loop-checkbox" checked>
+                        <span class="debug-checkbox-label">Loop</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="card collapsible-section" id="options-section">
+                <div class="section-header">
+                    <button class="collapse-toggle" data-section="options-section" title="Toggle Options">
+                        <span class="collapse-icon">▶</span>
+                    </button>
+                    <h3 class="section-title">Options</h3>
                 </div>
 
-                <!-- Options Section -->
-                <div class="config-section collapsible-section" id="options-section">
-                    <div class="section-header">
-                        <button class="collapse-toggle" data-section="options-section" title="Toggle Options">
-                            <span class="collapse-icon">▶</span>
-                        </button>
-                        <h3 class="section-title">⚙️ Options</h3>
+                <div class="section-content collapsed" id="options-content" style="max-height: 0;">
+                    <div class="option-row">
+                        <label for="view-radius-input" class="option-label">Visibility Radius:</label>
+                        <input type="number" id="view-radius-input" class="option-input" min="1" max="30" value="10">
+                    </div>
+                    <div style="font-size: 11px; color: #888; margin-top: -10px; margin-bottom: 15px; padding-left: 10px;">
+                        (1-30, 10=default, 30=full grid)
                     </div>
 
-                    <div class="section-content collapsed" id="options-content" style="max-height: 0;">
-                        <div class="option-row" style="background: transparent; border: none; padding: 0; margin-bottom: 15px; margin-top: 10px; align-items: center;">
-                            <label for="view-radius-input" class="option-label">Visibility Radius:</label>
-                            <input type="number" id="view-radius-input" class="option-input" min="1" max="30" value="10">
-                        </div>
-                        <div style="font-size: 11px; color: #888; margin-top: -10px; margin-bottom: 15px; padding-left: 10px;">
-                            (1-30, 10=default, 30=full grid)
-                        </div>
+                    <label class="debug-checkbox-wrapper debug-compact">
+                        <input type="checkbox" id="collision-avoidance-checkbox" checked>
+                        <span class="debug-checkbox-label">Collision Avoidance</span>
+                    </label>
 
-                        <label class="debug-checkbox-wrapper debug-compact">
-                            <input type="checkbox" id="collision-avoidance-checkbox" checked>
-                            <span class="debug-checkbox-label">🛡️ Collision Avoidance</span>
-                        </label>
+                    <label class="debug-checkbox-wrapper debug-compact" title="Include per-fruit distance + compass directions (e.g. '8 right, 1 down') in the LLM prompt. Off = coordinates + value only.">
+                        <input type="checkbox" id="provide-hints-checkbox" checked>
+                        <span class="debug-checkbox-label">Provide Hints</span>
+                    </label>
 
-                        <label class="debug-checkbox-wrapper debug-compact" title="Include per-fruit distance + compass directions (e.g. '8 right, 1 down') in the LLM prompt. Off = coordinates + value only.">
-                            <input type="checkbox" id="provide-hints-checkbox" checked>
-                            <span class="debug-checkbox-label">🧭 Provide Hints</span>
-                        </label>
+                    <label class="debug-checkbox-wrapper debug-compact">
+                        <input type="checkbox" id="debug-checkbox">
+                        <span class="debug-checkbox-label">Debug Mode</span>
+                    </label>
 
-                        <label class="debug-checkbox-wrapper debug-compact">
-                            <input type="checkbox" id="debug-checkbox">
-                            <span class="debug-checkbox-label">🐛 Debug Mode</span>
-                        </label>
+                    <label class="debug-checkbox-wrapper debug-compact" title="Let the model 'think'/reason before answering (slower). Off = send enable_thinking=false.">
+                        <input type="checkbox" id="thinking-mode-checkbox">
+                        <span class="debug-checkbox-label">Model Reasoning</span>
+                    </label>
+                </div>
+            </div>
 
-                        <label class="debug-checkbox-wrapper debug-compact" title="Let the model 'think'/reason before answering (slower). Off = send enable_thinking=false.">
-                            <input type="checkbox" id="thinking-mode-checkbox">
-                            <span class="debug-checkbox-label">🧠 Model Reasoning</span>
-                        </label>
-                    </div>
+            <div class="card collapsible-section" id="extra-section">
+                <div class="section-header">
+                    <button class="collapse-toggle" data-section="extra-section" title="Toggle Extra">
+                        <span class="collapse-icon">▶</span>
+                    </button>
+                    <h3 class="section-title">Extra</h3>
                 </div>
 
-                <!-- Extra Section -->
-                <div class="config-section collapsible-section" id="extra-section">
-                    <div class="section-header">
-                        <button class="collapse-toggle" data-section="extra-section" title="Toggle Extra">
-                            <span class="collapse-icon">▶</span>
+                <div class="section-content collapsed" id="extra-content" style="max-height: 0;">
+                    <div class="benchmark-buttons-container" style="margin-top: 10px;">
+                        <button id="benchmark-btn" class="btn btn-warning btn-small" title="Run benchmarks on all loaded models">
+                            ⚡ Run Benchmarks
                         </button>
-                        <h3 class="section-title">🔧 Extra</h3>
+                        <button id="show-results-btn" class="btn btn-info btn-small btn-disabled" title="Show benchmark results (run benchmarks first)">
+                            📈 Show Results
+                        </button>
                     </div>
 
-                    <div class="section-content collapsed" id="extra-content" style="max-height: 0;">
-                        <div class="benchmark-buttons-container" style="margin-top: 10px;">
-                            <button id="benchmark-btn" class="btn btn-warning btn-small" title="Run benchmarks on all loaded models">
-                                ⚡ Run Benchmarks
-                            </button>
-                            <button id="show-results-btn" class="btn btn-info btn-small btn-disabled" title="Show benchmark results (run benchmarks first)">
-                                📈 Show Results
-                            </button>
-                        </div>
-
-                        <div class="sort-buttons-container">
-                            <span class="sort-buttons-label">Models:</span>
-                            <button id="sort-by-name-btn" class="btn btn-secondary btn-small" title="Sort models alphabetically by name">
-                                Sort by Name
-                            </button>
-                            <button id="sort-by-speed-btn" class="btn btn-secondary btn-small btn-disabled" title="Sort models by benchmark (run benchmarks first)">
-                                Sort by Benchmark
-                            </button>
-                        </div>
+                    <div class="sort-buttons-container">
+                        <span class="sort-buttons-label">Models:</span>
+                        <button id="sort-by-name-btn" class="btn btn-secondary btn-small" title="Sort models alphabetically by name">
+                            Sort by Name
+                        </button>
+                        <button id="sort-by-speed-btn" class="btn btn-secondary btn-small btn-disabled" title="Sort models by benchmark (run benchmarks first)">
+                            Sort by Benchmark
+                        </button>
                     </div>
-                </div>
                 </div>
             </div>
         </div>
 
-        <!-- Right Pane: Game Visuals -->
-        <div class="right-pane">
-            <h1 class="game-pane-title">🐍🐍 Snake Battle 🐍🐍</h1>
-            <div class="game-pane">
-                <!-- Timer + legend trigger (one row, above the board) -->
-                <div class="game-toolbar">
-                    <button type="button" id="fruit-legend-btn" class="fruit-legend-btn"
-                            aria-expanded="false" aria-haspopup="true" title="Legend"
-                            aria-label="Legend">
-                        🍎
-                    </button>
-                    <div class="timer-display stats-panel-timer" id="game-timer">
-                        <span class="timer-icon">⏱️</span>
+        <!-- Center: scoreboard + board + latency -->
+        <div class="centercol">
+            <div class="scoreboard">
+                <div class="team">
+                    <span class="player-dot red"></span>
+                    <div class="team-who">
+                        <b id="p1-model-name">Player 1</b>
+                        <small id="sb-p1-sub">length 3 · 0 moves</small>
+                    </div>
+                    <div class="team-score" id="sb-p1-score">3</div>
+                </div>
+                <div class="score-mid">
+                    <span class="score-live">● LIVE</span>
+                    <div class="timer-display" id="game-timer">
                         <span class="timer-value">0:00</span>
                     </div>
                 </div>
-
-                <!-- Game Area: legend column removed; canvas is now leftmost -->
-                <div class="game-layout">
-                    <div class="game-center-panel">
-                        <div class="game-canvas-container">
-                            <canvas id="game-canvas"></canvas>
-                        </div>
+                <div class="team team-right">
+                    <div class="team-score" id="sb-p2-score">3</div>
+                    <div class="team-who">
+                        <b id="p2-model-name">Player 2</b>
+                        <small id="sb-p2-sub">length 3 · 0 moves</small>
                     </div>
-                    <div class="game-right-panel">
-                        <div class="game-log-panel" id="game-log-container">
-                            <h3>Game Log</h3>
-                            <div id="log-content"></div>
-                            <div class="log-controls">
-                                <label class="log-control-checkbox" title="Show every turn and detailed API logs. Off = only key game events.">
-                                    <input type="checkbox" id="all-logs-checkbox">
-                                    <span>📝 All Logs</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
+                    <span class="player-dot blue"></span>
                 </div>
+            </div>
+            <div class="hidden">
+                <span id="p1-model-stats" class="player-stats-text">length: 3, moves: 0</span>
+                <span id="p2-model-stats" class="player-stats-text">length: 3, moves: 0</span>
+            </div>
 
-                <!-- Stats Panel -->
-                <div class="stats-panel">
-                    <div class="player-card">
-                        <div class="player-model">
-                            <span class="player-dot red"></span>
-                            <span id="p1-model-name">Player 1</span>
-                            <span id="p1-model-stats" class="player-stats-text">length: 3, moves: 0</span>
-                        </div>
-                        <div class="latency-timegraph">
-                            <div class="latency-graph-container">
-                                <div class="latency-graph-title">Latency</div>
-                                <canvas id="p1-latency-canvas" width="280" height="60"></canvas>
-                            </div>
-                        </div>
+            <div class="boardcard">
+                <div class="game-canvas-container">
+                    <canvas id="game-canvas"></canvas>
+                </div>
+                <div class="latrow">
+                    <div class="latcard">
+                        <div class="latency-graph-title"><span class="player-dot red"></span>P1 latency</div>
+                        <canvas id="p1-latency-canvas" width="280" height="60"></canvas>
                         <div class="latency-stats" id="p1-latency-stats"></div>
                     </div>
-
-                    <div class="vs">VS</div>
-
-                    <div class="player-card">
-                        <div class="player-model">
-                            <span class="player-dot blue"></span>
-                            <span id="p2-model-name">Player 2</span>
-                            <span id="p2-model-stats" class="player-stats-text">length: 3, moves: 0</span>
-                        </div>
-                        <div class="latency-timegraph">
-                            <div class="latency-graph-container">
-                                <div class="latency-graph-title">Latency</div>
-                                <canvas id="p2-latency-canvas" width="280" height="60"></canvas>
-                            </div>
-                        </div>
+                    <div class="latcard">
+                        <div class="latency-graph-title"><span class="player-dot blue"></span>P2 latency</div>
+                        <canvas id="p2-latency-canvas" width="280" height="60"></canvas>
                         <div class="latency-stats" id="p2-latency-stats"></div>
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Right rail: game log -->
+        <div class="logcard" id="game-log-container">
+            <div class="logcard-header">
+                <h2>Game Log</h2>
+                <label class="log-control-checkbox" title="Show every turn and detailed API logs. Off = only key game events.">
+                    <input type="checkbox" id="all-logs-checkbox">
+                    <span>📝 All Logs</span>
+                </label>
+            </div>
+            <div id="log-content"></div>
         </div>
     </div>
 
@@ -238,7 +269,7 @@
     <div id="benchmark-modal" class="benchmark-modal hidden">
         <div class="benchmark-modal-content">
             <div class="benchmark-modal-header">
-                <h2>📊 Benchmark Results</h2>
+                <h2>Benchmark Results</h2>
                 <button id="close-modal-btn" class="close-modal-btn">✕</button>
             </div>
             <div class="benchmark-modal-body" id="benchmark-results-container">
@@ -247,8 +278,8 @@
         </div>
     </div>
 
-    <script src="js/core.js"></script>
-    <script src="js/game.js"></script>
-    <script src="js/benchmark.js"></script>
+    <script src="js/core.js?v=24"></script>
+    <script src="js/game.js?v=24"></script>
+    <script src="js/benchmark.js?v=24"></script>
 </body>
 </html>

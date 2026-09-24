@@ -113,12 +113,14 @@ class ModelBenchmark {
         console.log('✅ Models sorted by name successfully');
     }
 
-    /** Re-populate both player model dropdowns from availableModels. */
+    /** Re-populate both player model dropdowns from their provider lists. */
     _repopulateDropdowns() {
         const player1ModelOptions = document.getElementById('player1-model-options');
         const player2ModelOptions = document.getElementById('player2-model-options');
-        if (player1ModelOptions) populateSearchableDropdown(player1ModelOptions, availableModels, 'player1');
-        if (player2ModelOptions) populateSearchableDropdown(player2ModelOptions, availableModels, 'player2');
+        const p1List = (typeof availableModelsP1 !== 'undefined') ? availableModelsP1 : availableModels;
+        const p2List = (typeof availableModelsP2 !== 'undefined') ? availableModelsP2 : availableModels;
+        if (player1ModelOptions) populateSearchableDropdown(player1ModelOptions, p1List, 'player1');
+        if (player2ModelOptions) populateSearchableDropdown(player2ModelOptions, p2List, 'player2');
     }
 
     /**
@@ -906,23 +908,21 @@ class ModelBenchmark {
         const startTime = performance.now();
 
         try {
-            const response = await fetch(`${apiUrl}chat/completions`, {
+            const { url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildChatRequest({
+                apiUrl, apiKey, model: modelName,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.1,
+                stream: true,
+                thinkingEnabled
+            });
+            const response = await fetch(requestUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                },
+                headers: requestHeaders,
                 signal: abortController.signal,
-                body: JSON.stringify({
-                    model: modelName,
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt }
-                    ],
-                    temperature: 0.1,
-                    stream: true,
-                    chat_template_kwargs: { enable_thinking: thinkingEnabled }
-                })
+                body: JSON.stringify(requestBody)
             });
 
             if (!response.ok) {
@@ -1044,26 +1044,20 @@ class ModelBenchmark {
 
             // Race between the actual fetch and the timeout
             try {
+                const { url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildChatRequest({
+                    apiUrl, apiKey, model: modelName,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    temperature: 0.1,
+                    thinkingEnabled
+                });
                 const response = await Promise.race([
-                    fetch(`${apiUrl}chat/completions`, {
+                    fetch(requestUrl, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`
-                        },
-                        body: JSON.stringify({
-                            model: modelName,
-                            messages: [
-                                { role: 'system', content: systemPrompt },
-                                { role: 'user', content: userPrompt }
-                            ],
-                            temperature: 0.1,
-                            // Respect the UI "Model Reasoning" toggle so speed
-                            // tests can compare thinking on vs off.
-                            chat_template_kwargs: {
-                                enable_thinking: thinkingEnabled
-                            }
-                        })
+                        headers: requestHeaders,
+                        body: JSON.stringify(requestBody)
                     }),
                     timeoutPromise
                 ]);
@@ -1270,14 +1264,31 @@ document.addEventListener('DOMContentLoaded', () => {
             // Disable button immediately
             benchmarkBtn.disabled = true;
 
-            const apiUrl = document.getElementById('api-url').value;
-            const apiKey = document.getElementById('api-key').value;
+            const apiUrl = document.getElementById('api-url-1').value;
+            const apiKey = document.getElementById('api-key-1').value;
+            const sameProvider = document.getElementById('same-provider-checkbox')?.checked ?? true;
+            const apiUrl2 = document.getElementById('api-url-2')?.value || '';
+            const apiKey2 = document.getElementById('api-key-2')?.value || '';
             // Mirror the Options toggle so benchmarks compare the same setting used in-game
             const thinkingEnabled = document.getElementById('thinking-mode-checkbox')?.checked ?? false;
 
-            if (!apiUrl || !apiKey) {
-                console.error('❌ Please provide API URL and API key');
-                alert('Please provide API URL and API key');
+            if (!apiUrl) {
+                console.error('❌ Please provide Provider 1 API URL');
+                alert('Please provide Provider 1 API URL');
+                benchmarkBtn.disabled = false;
+                return;
+            }
+
+            if (!apiKey && !SnakeCore.isLocalBaseUrl(apiUrl)) {
+                console.error('❌ Please provide Provider 1 API key');
+                alert('Please provide Provider 1 API key');
+                benchmarkBtn.disabled = false;
+                return;
+            }
+
+            if (!sameProvider && (!apiUrl2 || (!apiKey2 && !SnakeCore.isLocalBaseUrl(apiUrl2)))) {
+                console.error('❌ Please provide Provider 2 credentials (or check "Use same provider")');
+                alert('Please provide Provider 2 credentials (or check "Use same provider")');
                 benchmarkBtn.disabled = false;
                 return;
             }
@@ -1316,10 +1327,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.warn(`   ⚠️  No runner method "${b.runner}" for benchmark "${b.id}" — skipping`);
                         continue;
                     }
-                    await Promise.allSettled(availableModels.map(model =>
+                    await Promise.allSettled(availableModels.map(model => {
+                        // Each model is benchmarked against its own provider's credentials.
+                        const raw = (model._provider === 2 && !sameProvider)
+                            ? { url: apiUrl2, key: apiKey2 }
+                            : { url: apiUrl, key: apiKey };
+                        const creds = { url: raw.url, key: SnakeCore.effectiveApiKey(raw.url, raw.key) };
                         // Count omitted so each runner applies its own default
-                        runner.call(benchmark, apiUrl, apiKey, model.id, undefined, thinkingEnabled)
-                    ));
+                        return runner.call(benchmark, creds.url, creds.key, model.id, undefined, thinkingEnabled);
+                    }));
                 }
 
                 benchmark.printResults();

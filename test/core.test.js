@@ -131,3 +131,80 @@ test('formatBytes thresholds', () => {
     assert.equal(Core.formatBytes(2048), '2.0KB');
     assert.equal(Core.formatBytes(5 * 1024 * 1024), '5.0MB');
 });
+
+test('resolvePlayerCredentials routes players to providers', () => {
+    const p1 = { apiUrl: 'https://one/v1/', apiKey: 'key-one-12345' };
+    const p2 = { apiUrl: 'https://two/v1/', apiKey: 'key-two-12345' };
+    assert.deepEqual(Core.resolvePlayerCredentials(true, p1, p2, 1), p1);
+    assert.deepEqual(Core.resolvePlayerCredentials(true, p1, p2, 2), p1);
+    assert.deepEqual(Core.resolvePlayerCredentials(false, p1, p2, 1), p1);
+    assert.deepEqual(Core.resolvePlayerCredentials(false, p1, p2, 2), p2);
+    assert.deepEqual(Core.resolvePlayerCredentials(false, null, null, 2), { apiUrl: '', apiKey: '' });
+});
+
+test('isOpenAIEndpoint detects OpenAI hosts', () => {
+    assert.equal(Core.isOpenAIEndpoint('https://api.openai.com/v1/'), true);
+    assert.equal(Core.isOpenAIEndpoint('https://api.openai.com/v1'), true);
+    assert.equal(Core.isOpenAIEndpoint('https://api.tokenfactory.nebius.com/v1/'), false);
+    assert.equal(Core.isOpenAIEndpoint('http://localhost:11434/v1/'), false);
+    assert.equal(Core.isOpenAIEndpoint('not a url'), false);
+    assert.equal(Core.isOpenAIEndpoint(''), false);
+});
+
+test('describeFetchFailure explains CORS, with OpenAI guidance', () => {
+    const openaiMsg = Core.describeFetchFailure('https://api.openai.com/v1/', new TypeError('Failed to fetch'));
+    assert.match(openaiMsg, /CORS/);
+    assert.match(openaiMsg, /proxy/);
+    assert.match(openaiMsg, /Failed to fetch/);
+    const otherMsg = Core.describeFetchFailure('https://example.com/v1/', new TypeError('Failed to fetch'));
+    assert.match(otherMsg, /CORS/);
+    assert.doesNotMatch(otherMsg, /proxy/);
+    assert.equal(Core.describeFetchFailure('https://example.com/v1/', null), 'Network error — check connectivity, or the endpoint may block browser requests (CORS).');
+});
+
+test('buildChatRequest cleans per provider in one place', () => {    const msgs = [{ role: 'user', content: 'hi' }];
+    const openai = Core.buildChatRequest({ apiUrl: 'https://api.openai.com/v1/', apiKey: 'sk-1234567890', model: 'gpt-4o', messages: msgs, temperature: 0, thinkingEnabled: true });
+    assert.equal(openai.url, 'https://api.openai.com/v1/chat/completions');
+    assert.equal(openai.headers['Authorization'], 'Bearer sk-1234567890');
+    assert.ok(!('chat_template_kwargs' in openai.body));
+    const openaiCapped = Core.buildChatRequest({ apiUrl: 'https://api.openai.com/v1/', apiKey: 'sk-1234567890', model: 'gpt-4o', messages: msgs, temperature: 0, maxTokens: 10 });
+    assert.equal(openaiCapped.body.max_completion_tokens, 10);
+    assert.ok(!('max_tokens' in openaiCapped.body));
+    const nebius = Core.buildChatRequest({ apiUrl: 'https://api.tokenfactory.nebius.com/v1/', apiKey: 'k-1234567890', model: 'm', messages: msgs, temperature: 0, maxTokens: 10, stream: true, thinkingEnabled: true });
+    assert.deepEqual(nebius.body.chat_template_kwargs, { enable_thinking: true });
+    assert.equal(nebius.body.max_tokens, 10);
+    assert.equal(nebius.body.stream, true);
+    const local = Core.buildChatRequest({ apiUrl: 'http://localhost:11434/v1/', apiKey: '', model: 'm', messages: msgs, temperature: 0 });
+    assert.equal(local.headers['Authorization'], 'Bearer ollama');
+    assert.equal(local.body.temperature, 0);
+    const reasoning = Core.buildChatRequest({ apiUrl: 'https://api.openai.com/v1/', apiKey: 'sk-1234567890', model: 'o1-mini', messages: msgs, temperature: 0, maxTokens: 10 });
+    assert.ok(!('temperature' in reasoning.body));
+    assert.equal(reasoning.body.max_completion_tokens, 10);
+    const gpt4o = Core.buildChatRequest({ apiUrl: 'https://api.openai.com/v1/', apiKey: 'sk-1234567890', model: 'gpt-4o', messages: msgs, temperature: 0 });
+    assert.ok(!('temperature' in gpt4o.body));
+});
+
+test('isLocalBaseUrl detects loopback hosts', () => {
+    assert.equal(Core.isLocalBaseUrl('http://localhost:11434/v1/'), true);
+    assert.equal(Core.isLocalBaseUrl('http://127.0.0.1:11434/v1/'), true);
+    assert.equal(Core.isLocalBaseUrl('https://api.openai.com/v1/'), false);
+    assert.equal(Core.isLocalBaseUrl('not a url'), false);
+    assert.equal(Core.isLocalBaseUrl(''), false);
+});
+
+test('effectiveApiKey substitutes placeholder for local servers', () => {
+    assert.equal(Core.effectiveApiKey('http://localhost:11434/v1/', ''), 'ollama');
+    assert.equal(Core.effectiveApiKey('http://localhost:11434/v1/', 'real-key-123'), 'real-key-123');
+    assert.equal(Core.effectiveApiKey('https://api.openai.com/v1/', ''), '');
+});
+
+test('getProviderPresets lists known providers with URLs', () => {
+    const presets = Core.getProviderPresets();
+    const byId = Object.fromEntries(presets.map(p => [p.id, p]));
+    assert.equal(byId['openai'].url, 'https://api.openai.com/v1/');
+    assert.equal(byId['together'].url, 'https://api.together.xyz/v1/');
+    assert.equal(byId['ollama-local'].url, 'http://localhost:11434/v1/');
+    assert.equal(byId['anthropic'].url, '');
+    assert.equal(byId['custom'].url, '');
+    assert.equal(byId['openai'].url, 'https://api.openai.com/v1/');
+});

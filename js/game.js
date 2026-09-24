@@ -106,8 +106,13 @@ let gameState = {
     player1ConsecutiveFailures: 0,
     player2ConsecutiveFailures: 0,
     turnDelay: 0,
-    apiUrl: '',
-    apiKey: '',
+    // Per-player provider credentials (Provider 1 always serves Player 1;
+    // Player 2 uses Provider 1 when sameProvider, else Provider 2).
+    sameProvider: true,
+    player1ApiUrl: '',
+    player1ApiKey: '',
+    player2ApiUrl: '',
+    player2ApiKey: '',
     player1Model: '',
     player2Model: '',
     debugMode: false,
@@ -129,8 +134,18 @@ let gameState = {
 };
 
 // DOM Elements
-const apiUrlInput = document.getElementById('api-url');
-const apiKeyInput = document.getElementById('api-key');
+const apiUrlInput1 = document.getElementById('api-url-1');
+const apiKeyInput1 = document.getElementById('api-key-1');
+const apiUrlInput2 = document.getElementById('api-url-2');
+const apiKeyInput2 = document.getElementById('api-key-2');
+const sameProviderCheckbox = document.getElementById('same-provider-checkbox');
+const provider2Block = document.getElementById('provider-2-block');
+const p1SrcLabel = document.getElementById('p1-src');
+const p2SrcLabel = document.getElementById('p2-src');
+const sbP1Score = document.getElementById('sb-p1-score');
+const sbP1Sub = document.getElementById('sb-p1-sub');
+const sbP2Score = document.getElementById('sb-p2-score');
+const sbP2Sub = document.getElementById('sb-p2-sub');
 const loadModelsBtn = document.getElementById('load-models-btn');
 const loadingDiv = document.getElementById('loading');
 const modelsLoadedCount = document.getElementById('models-loaded-count');
@@ -151,6 +166,8 @@ const viewRadiusInput = document.getElementById('view-radius-input');
 const logContent = document.getElementById('log-content');
 const gameTimerElement = document.getElementById('game-timer');
 const timerValueElement = gameTimerElement?.querySelector('.timer-value');
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
+const themeToggleIcon = document.getElementById('theme-toggle-icon');
 let timerInterval = null;
 
 // Searchable dropdown elements
@@ -158,6 +175,143 @@ const player1ModelSearch = document.getElementById('player1-model-search');
 const player1ModelOptions = document.getElementById('player1-model-options');
 const player2ModelSearch = document.getElementById('player2-model-search');
 const player2ModelOptions = document.getElementById('player2-model-options');
+
+// Theme (dark / light) — toggle lives in the topbar, persists to localStorage.
+function getCurrentTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function getBoardThemeColors() {
+    if (getCurrentTheme() === 'light') {
+        return { bg: '#ffffff', grid: 'rgba(17, 24, 39, 0.1)' };
+    }
+    return { bg: '#0a0a15', grid: 'rgba(255, 255, 255, 0.09)' };
+}
+
+// Fruit fills per theme: neon hues vanish on the white board, so light
+// mode uses deeper variants of the same hue.
+function getFruitFill(emoji) {
+    const light = getCurrentTheme() === 'light';
+    const palette = {
+        '🍎': ['#FF6B6B', '#EF4444'],
+        '🍇': ['#9B5DE5', '#7C3AED'],
+        '⭐': ['#FFD93D', '#B45309'],
+        '🍒': ['#FF4444', '#DC2626'],
+        '💎': ['#00D9FF', '#0284C7'],
+        '🦋': ['#00F5D4', '#0D9488'],
+        '🎁': ['#FF9F1C', '#D97706'],
+    };
+    const pair = palette[emoji] || [emoji, emoji];
+    return light ? pair[1] : pair[0];
+}
+
+function applyTheme(theme) {
+    const next = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try {
+        localStorage.setItem('snake-arena-theme', next);
+    } catch (e) { /* private mode: skip persistence */ }
+    if (themeToggleBtn) {
+        const toLight = next === 'dark'; // button shows what you switch TO
+        themeToggleBtn.title = toLight ? 'Switch to light theme' : 'Switch to dark theme';
+        themeToggleBtn.setAttribute('aria-label', themeToggleBtn.title);
+        themeToggleBtn.setAttribute('aria-pressed', next === 'light' ? 'true' : 'false');
+    }
+    if (themeToggleIcon) {
+        // Moon (in dark) invites light; sun (in light) invites dark.
+        themeToggleIcon.textContent = next === 'dark' ? '🌙' : '☀️';
+    }
+    // Repaint the board with the new surface colors.
+    if (typeof draw === 'function' && typeof gameState !== 'undefined') {
+        draw();
+    }
+    // Repaint latency graphs with the new ink colors.
+    if (typeof handleResize === 'function') {
+        handleResize();
+    }
+}
+
+function initTheme() {
+    let saved = null;
+    try {
+        saved = localStorage.getItem('snake-arena-theme');
+    } catch (e) { /* ignore */ }
+    if (saved !== 'light' && saved !== 'dark') {
+        saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    }
+    applyTheme(saved);
+    if (themeToggleBtn) {
+        addTrackedEventListener(themeToggleBtn, 'click', () => {
+            applyTheme(getCurrentTheme() === 'dark' ? 'light' : 'dark');
+        });
+    }
+}
+
+// One provider's URL+key validation. Local servers (Ollama) may skip the key.
+function validateProviderInput(apiUrl, apiKey, label) {
+    if (!apiUrl) {
+        showError(`Please enter ${label} API URL`);
+        return false;
+    }
+    if (!isValidApiUrl(apiUrl)) {
+        showError(`Please enter a valid ${label} API URL (e.g., https://api.example.com/v1/)`);
+        return false;
+    }
+    if (!apiKey && !SnakeCore.isLocalBaseUrl(apiUrl)) {
+        showError(`Please enter ${label} API key`);
+        return false;
+    }
+    if (apiKey && !isValidApiKey(apiKey)) {
+        showError(`Please enter a valid ${label} API key`);
+        return false;
+    }
+    return true;
+}
+
+// Preset dropdowns: pick fills the URL; editing the URL flips back to Custom.
+function initProviderPresets() {
+    const presets = SnakeCore.getProviderPresets();
+    const groups = [
+        { selId: 'provider-1-preset', urlInput: apiUrlInput1, keyInput: apiKeyInput1, noteId: 'provider-1-note', keyPlaceholder: 'API key' },
+        { selId: 'provider-2-preset', urlInput: apiUrlInput2, keyInput: apiKeyInput2, noteId: 'provider-2-note', keyPlaceholder: 'Second API key' },
+    ];
+    groups.forEach((g) => {
+        const selEl = document.getElementById(g.selId);
+        const noteEl = document.getElementById(g.noteId);
+        if (!selEl || !g.urlInput) return;
+        presets.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.label;
+            selEl.appendChild(opt);
+        });
+        const applyNote = (id) => {
+            const p = presets.find((x) => x.id === id);
+            if (noteEl) {
+                noteEl.textContent = (p && p.note) || '';
+                noteEl.hidden = !(p && p.note);
+                noteEl.classList.toggle('warn', !!(p && p.warn));
+            }
+            if (g.keyInput) {
+                g.keyInput.placeholder = id === 'ollama-local' ? 'Not required for local Ollama' : g.keyPlaceholder;
+            }
+        };
+        const matchPreset = () => {
+            const v = normalizeApiUrl((g.urlInput.value || '').trim());
+            const hit = presets.find((p) => p.url && normalizeApiUrl(p.url) === v);
+            selEl.value = hit ? hit.id : 'custom';
+            applyNote(selEl.value);
+        };
+        addTrackedEventListener(selEl, 'change', () => {
+            const p = presets.find((x) => x.id === selEl.value);
+            if (p && p.url) g.urlInput.value = p.url;
+            applyNote(selEl.value);
+            if (g.urlInput === apiUrlInput1 && sameProviderCheckbox?.checked) syncCredentialsFromInputs();
+        });
+        addTrackedEventListener(g.urlInput, 'input', matchPreset);
+        matchPreset();
+    });
+}
 
 // Timer functions
 function updateTimerDisplay() {
@@ -229,7 +383,92 @@ function removeTrackedEventListeners() {
 }
 
 // Store models
-let availableModels = [];
+let availableModels = []; // union of both providers (benchmark + compat)
+let availableModelsP1 = []; // Provider 1 models (Player 1's dropdown)
+let availableModelsP2 = []; // Provider 2 models, or P1's list when sameProvider
+
+// Models list backing a player's dropdown.
+function modelsForPlayer(playerKey) {
+    return playerKey === 'player2' ? availableModelsP2 : availableModelsP1;
+}
+
+// Credentials for a player's move request (impl rule: js/core.js).
+function getPlayerCredentials(playerNum) {
+    return SnakeCore.resolvePlayerCredentials(
+        gameState.sameProvider,
+        { apiUrl: gameState.player1ApiUrl, apiKey: gameState.player1ApiKey },
+        { apiUrl: gameState.player2ApiUrl, apiKey: gameState.player2ApiKey },
+        playerNum
+    );
+}
+
+// Reads the provider inputs into gameState (P2 mirrors P1 when sameProvider).
+function syncCredentialsFromInputs() {
+    gameState.sameProvider = sameProviderCheckbox ? sameProviderCheckbox.checked : true;
+    gameState.player1ApiUrl = normalizeApiUrl((apiUrlInput1?.value || '').trim());
+    gameState.player1ApiKey = (apiKeyInput1?.value || '').trim();
+    if (gameState.sameProvider) {
+        gameState.player2ApiUrl = gameState.player1ApiUrl;
+        gameState.player2ApiKey = gameState.player1ApiKey;
+    } else {
+        gameState.player2ApiUrl = normalizeApiUrl((apiUrlInput2?.value || '').trim());
+        gameState.player2ApiKey = (apiKeyInput2?.value || '').trim();
+    }
+}
+
+// Source labels under each player's dropdown ("↳ Provider 1" etc.).
+function updateProviderLabels() {
+    if (p1SrcLabel) p1SrcLabel.textContent = '↳ Provider 1';
+    if (p2SrcLabel) p2SrcLabel.textContent = gameState.sameProvider ? '↳ Provider 1 (same)' : '↳ Provider 2';
+}
+
+// Same-provider checkbox: dim Provider 2, mirror creds, refresh P2's list.
+function initProviders() {
+    if (!sameProviderCheckbox) return;
+    const applySameProvider = () => {
+        const same = sameProviderCheckbox.checked;
+        gameState.sameProvider = same;
+        if (provider2Block) provider2Block.classList.toggle('off', same);
+        if (apiUrlInput2) apiUrlInput2.disabled = same;
+        if (apiKeyInput2) apiKeyInput2.disabled = same;
+        const preset2 = document.getElementById('provider-2-preset');
+        if (preset2) preset2.disabled = same;
+        // Provider 2 lives in a <details>: open only when separate.
+        const details2 = document.getElementById('provider-2-details');
+        if (details2) {
+            details2.open = !same;
+            details2.classList.toggle('off', same);
+        }
+        const state2 = document.getElementById('provider-2-state');
+        if (state2) state2.textContent = same ? '· same as Provider 1' : '· separate endpoint';
+        if (same) {
+            // P2 shares P1's list and selection stays valid.
+            availableModelsP2 = availableModelsP1;
+            populateSearchableDropdown(player2ModelOptions, availableModelsP2, 'player2');
+        }
+        syncCredentialsFromInputs();
+        updateProviderLabels();
+    };
+    addTrackedEventListener(sameProviderCheckbox, 'change', async () => {
+        applySameProvider();
+        // Unchecking with a configured Provider 2 auto-loads its models.
+        if (!sameProviderCheckbox.checked && apiUrlInput2?.value.trim() && apiKeyInput2?.value.trim()) {
+            await loadModels();
+        }
+    });
+    // While same-provider is on, P1 edits flow through to P2's creds.
+    [apiUrlInput1, apiKeyInput1].forEach((el) => {
+        if (el) addTrackedEventListener(el, 'input', () => {
+            if (sameProviderCheckbox.checked) syncCredentialsFromInputs();
+        });
+    });
+    // Don't let the P2 <details> open while it shares Provider 1.
+    const details2 = document.getElementById('provider-2-details');
+    if (details2) addTrackedEventListener(details2, 'toggle', () => {
+        if (sameProviderCheckbox.checked && details2.open) details2.open = false;
+    });
+    applySameProvider();
+}
 
 // Game loop abort controller
 let gameLoopAbortController = null;
@@ -418,11 +657,30 @@ function initializeCollapsibleSections() {
                 }
             }
         });
+
+        // Whole header row toggles (button clicks are handled above).
+        const header = button.closest('.collapsible-section')?.querySelector('.section-header');
+        if (header && !header.dataset.toggleWired) {
+            header.dataset.toggleWired = '1';
+            addTrackedEventListener(header, 'click', (e) => {
+                if (e.target.closest('.collapse-toggle')) return;
+                e.stopPropagation();
+                button.click();
+            });
+        }
     });
 }
 
 // Call initialization
 initializeCollapsibleSections();
+
+// Programmatic collapse/expand for a collapsible section (reuses the toggle).
+function setSectionCollapsed(sectionId, collapse) {
+    const content = document.getElementById(sectionId.replace('-section', '-content'));
+    const btn = document.querySelector(`.collapse-toggle[data-section="${sectionId}"]`);
+    if (!content || !btn) return;
+    if (content.classList.contains('collapsed') !== collapse) btn.click();
+}
 
 // Initialize loop mode from checkbox state
 if (loopCheckbox) {
@@ -641,33 +899,93 @@ function isNonTextModel(modelId) {
     return SnakeCore.isNonTextModel(modelId);
 }
 
-// Load models from API
+// Sort helper (by id, case-insensitive)
+function sortModelsById(a, b) {
+    const nameA = (a.name || a.id || '').toLowerCase();
+    const nameB = (b.name || b.id || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+}
+
+// Tag models with their provider (1 or 2) so moves/benchmarks use the right creds.
+function tagProvider(models, providerNum) {
+    models.forEach(m => { m._provider = providerNum; });
+    return models;
+}
+
+// Fetch + filter + sort models for ONE provider (verbose→standard fallback).
+// Returns { models, total }. Throws on failure; caller adds provider context.
+async function fetchProviderModels(apiUrl, apiKey) {
+    let response;
+    let data = null;
+
+    // OpenAI has no verbose endpoint — go straight to the standard one.
+    if (!SnakeCore.isOpenAIEndpoint(apiUrl)) {
+        try {
+            response = await fetch(`${apiUrl}models?verbose=true`, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+                credentials: 'omit'
+            });
+            if (!response.ok) throw new Error('Verbose request failed');
+            data = JSON.parse(await response.text());
+            const sample = data.data && data.data[0];
+            const hasVerbose = sample && ((sample.architecture && sample.architecture.modality) ||
+                (sample.capabilities && sample.capabilities.modalities));
+            if (!data.data || data.data.length === 0 || !hasVerbose) {
+                data = null;
+            }
+        } catch (verboseError) {
+            data = null;
+        }
+    } else {
+        console.log('ℹ️ Skipping verbose models request (not supported by OpenAI)');
+    }
+
+    if (!data) {
+        try {
+            response = await fetch(`${apiUrl}models`, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+                credentials: 'omit'
+            });
+        } catch (networkError) {
+            throw new Error(SnakeCore.describeFetchFailure(apiUrl, networkError));
+        }
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        try {
+            data = JSON.parse(await response.text());
+        } catch (jsonError) {
+            throw new Error(`Invalid JSON response: ${jsonError.message}`);
+        }
+    }
+
+    const allModels = data.data || [];
+    if (allModels.length === 0) {
+        throw new Error('No models found in API response');
+    }
+    const models = filterTextModels(allModels);
+    if (models.length === 0) {
+        throw new Error('No text-to-text models found in API response');
+    }
+    models.sort(sortModelsById);
+    return { models, total: allModels.length };
+}
+
+// Load models from one or both providers into per-player lists.
 async function loadModels() {
-    const apiUrl = normalizeApiUrl(apiUrlInput.value.trim());
-    const apiKey = apiKeyInput.value.trim();
+    syncCredentialsFromInputs();
+    const apiUrl = gameState.player1ApiUrl;
+    const apiKey = gameState.player1ApiKey;
+    const same = gameState.sameProvider;
 
     // Clear any previous error messages
     clearError();
 
-    if (!apiUrl) {
-        showError('Please enter an API URL');
-        return;
-    }
+    if (!validateProviderInput(apiUrl, apiKey, 'Provider 1')) return;
 
-    if (!isValidApiUrl(apiUrl)) {
-        showError('Please enter a valid API URL (e.g., https://api.example.com/v1/)');
-        return;
-    }
-
-    if (!apiKey) {
-        showError('Please enter an API key');
-        return;
-    }
-
-    if (!isValidApiKey(apiKey)) {
-        showError('Please enter a valid API key');
-        return;
-    }
+    if (!same && !validateProviderInput(gameState.player2ApiUrl, gameState.player2ApiKey, 'Provider 2')) return;
 
     loadingDiv.classList.remove('hidden');
 
@@ -676,53 +994,68 @@ async function loadModels() {
         let data;
         let hasVerboseData = false;
 
-        // Try verbose=true first (works with Nebius, OpenAI, etc.)
-        try {
-            console.log('🔄 Attempting to fetch models with verbose=true...');
-            response = await fetch(`${apiUrl}models?verbose=true`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`
-                },
-                credentials: 'omit'
-            });
+        // Try verbose=true first (works with Nebius, etc.). OpenAI has no
+        // verbose endpoint, so it goes straight to the standard request
+        // without a misleading "failed, falling back" message.
+        const tryVerbose = !SnakeCore.isOpenAIEndpoint(apiUrl);
+        if (tryVerbose) {
+            try {
+                console.log('🔄 Attempting to fetch models with verbose=true...');
+                response = await fetch(`${apiUrl}models?verbose=true`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    credentials: 'omit'
+                });
 
-            if (!response.ok) throw new Error('Verbose request failed');
+                if (!response.ok) throw new Error('Verbose request failed');
 
-            const responseText = await response.text();
-            data = JSON.parse(responseText);
+                const responseText = await response.text();
+                data = JSON.parse(responseText);
 
-            // Check if we actually got verbose data with architecture info
-            if (data.data && data.data.length > 0) {
-                const sampleModel = data.data[0];
+                // Check if we actually got verbose data with architecture info
+                if (data.data && data.data.length > 0) {
+                    const sampleModel = data.data[0];
 
-                // Check for architecture.modality (Nebius style)
-                if (sampleModel.architecture && sampleModel.architecture.modality) {
-                    hasVerboseData = true;
-                    console.log('✅ Using verbose response with architecture.modality data');
-                }
-                // Check for capabilities.modalities (OpenAI style)
-                else if (sampleModel.capabilities && sampleModel.capabilities.modalities) {
-                    hasVerboseData = true;
-                    console.log('✅ Using verbose response with capabilities.modalities data');
+                    // Check for architecture.modality (Nebius style)
+                    if (sampleModel.architecture && sampleModel.architecture.modality) {
+                        hasVerboseData = true;
+                        console.log('✅ Using verbose response with architecture.modality data');
+                    }
+                    // Check for capabilities.modalities (OpenAI style)
+                    else if (sampleModel.capabilities && sampleModel.capabilities.modalities) {
+                        hasVerboseData = true;
+                        console.log('✅ Using verbose response with capabilities.modalities data');
+                    } else {
+                        // Verbose response received but no useful data
+                        console.log('⚠️ Verbose response received but no architecture/capabilities data');
+                        throw new Error('No useful verbose data');
+                    }
                 } else {
-                    // Verbose response received but no useful data
-                    console.log('⚠️ Verbose response received but no architecture/capabilities data');
-                    throw new Error('No useful verbose data');
+                    throw new Error('No models in verbose response');
                 }
-            } else {
-                throw new Error('No models in verbose response');
+            } catch (verboseError) {
+                console.log('ℹ️ Verbose request failed, falling back to standard request');
+                data = undefined;
             }
-        } catch (verboseError) {
-            // Fallback to standard request
-            console.log('ℹ️ Verbose request failed or not supported, falling back to standard request');
-            response = await fetch(`${apiUrl}models`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`
-                },
-                credentials: 'omit'
-            });
+        } else {
+            console.log('ℹ️ Skipping verbose request (not supported by OpenAI)');
+        }
+
+        if (!data) {
+            // Standard request (verbose skipped or failed)
+            try {
+                response = await fetch(`${apiUrl}models`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    credentials: 'omit'
+                });
+            } catch (networkError) {
+                throw new Error(SnakeCore.describeFetchFailure(apiUrl, networkError));
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -736,17 +1069,6 @@ async function loadModels() {
                 throw new Error(`Invalid JSON response: ${jsonError.message}`);
             }
             hasVerboseData = false;
-        }
-
-        // Parse response if not already done
-        if (!data) {
-            try {
-                const responseText = await response.text();
-                data = JSON.parse(responseText);
-            } catch (jsonError) {
-                console.error('Failed to parse JSON response:', responseText);
-                throw new Error(`Invalid JSON response: ${jsonError.message}`);
-            }
         }
 
         let allModels = data.data || [];
@@ -766,27 +1088,49 @@ async function loadModels() {
         }
 
         // Filter to text-to-text models only (handles missing attributes gracefully)
-        availableModels = filterTextModels(allModels);
+        availableModelsP1 = tagProvider(filterTextModels(allModels), 1);
 
-        if (availableModels.length === 0) {
+        if (availableModelsP1.length === 0) {
             throw new Error('No text-to-text models found in API response');
         }
 
         // Sort models alphabetically (case-insensitive)
-        availableModels.sort((a, b) => {
-            const nameA = (a.name || a.id || '').toLowerCase();
-            const nameB = (b.name || b.id || '').toLowerCase();
-            return nameA.localeCompare(nameB);
-        });
+        availableModelsP1.sort(sortModelsById);
 
-        console.log(`✅ Loaded ${availableModels.length} text-to-text models (filtered from ${allModels.length} total)`);
+        console.log(`✅ Loaded ${availableModelsP1.length} text-to-text models (filtered from ${allModels.length} total)`);
+
+        // Provider 2: same list when sharing, otherwise its own fetch.
+        let p2Total = allModels.length;
+        if (same) {
+            availableModelsP2 = availableModelsP1;
+        } else {
+            try {
+                const p2 = await fetchProviderModels(gameState.player2ApiUrl, gameState.player2ApiKey);
+                availableModelsP2 = tagProvider(p2.models, 2);
+                p2Total = p2.total;
+                console.log(`✅ Loaded ${availableModelsP2.length} Provider 2 models (filtered from ${p2Total} total)`);
+            } catch (p2Error) {
+                throw new Error(`Provider 2: ${p2Error.message}`);
+            }
+        }
+
+        // Union (benchmark + compat); per-player lists back each dropdown.
+        availableModels = [...availableModelsP1];
+        if (!same) {
+            const p1Ids = new Set(availableModelsP1.map(m => m.id));
+            availableModelsP2.forEach(m => {
+                if (!p1Ids.has(m.id)) availableModels.push(m);
+            });
+        }
 
         populateModelSelects();
         loadingDiv.classList.add('hidden');
 
         // Show how many models loaded (text-to-text, filtered from total)
         if (modelsLoadedCount) {
-            modelsLoadedCount.textContent = `✓ Loaded ${availableModels.length} models (of ${allModels.length} total)`;
+            modelsLoadedCount.textContent = same
+                ? `✓ Loaded ${availableModelsP1.length} models (of ${allModels.length} total)`
+                : `✓ Loaded ${availableModelsP1.length} (P1) + ${availableModelsP2.length} (P2) models`;
             modelsLoadedCount.classList.remove('hidden');
         }
 
@@ -795,33 +1139,52 @@ async function loadModels() {
         document.dispatchEvent(new CustomEvent('modelsLoaded'));
         console.log('🎮 modelsLoaded event dispatched');
 
+        // Providers are set — collapse the section until they're needed again.
+        setSectionCollapsed('connection-section', true);
     } catch (error) {
         loadingDiv.classList.add('hidden');
         if (modelsLoadedCount) modelsLoadedCount.classList.add('hidden');
         showError(`Failed to load models: ${error.message}`);
+        // Surface the provider inputs so the failure can be fixed in place.
+        setSectionCollapsed('connection-section', false);
         console.error('Error loading models:', error);
     }
 }
 
-// Populate model searchable dropdowns
+// Populate model searchable dropdowns (each player from its own provider list)
 function populateModelSelects() {
     // Select different default models if available
-    if (availableModels.length > 1) {
-        gameState.player1Model = availableModels[0].id;
-        gameState.player2Model = availableModels[1].id;
-        player1ModelSearch.value = availableModels[0].id.split('/').pop();
-        player2ModelSearch.value = availableModels[1].id.split('/').pop();
-    } else if (availableModels.length > 0) {
-        gameState.player1Model = availableModels[0].id;
-        gameState.player2Model = availableModels[0].id;
-        player1ModelSearch.value = availableModels[0].id.split('/').pop();
-        player2ModelSearch.value = availableModels[0].id.split('/').pop();
+    if (availableModelsP1.length > 1) {
+        gameState.player1Model = availableModelsP1[0].id;
+        player1ModelSearch.value = availableModelsP1[0].id.split('/').pop();
+    } else if (availableModelsP1.length > 0) {
+        gameState.player1Model = availableModelsP1[0].id;
+        player1ModelSearch.value = availableModelsP1[0].id.split('/').pop();
+    }
+    if (availableModelsP2.length > 1) {
+        // Prefer a different model than P1 when possible
+        const alt = availableModelsP2.find(m => m.id !== gameState.player1Model) || availableModelsP2[0];
+        gameState.player2Model = alt.id;
+        player2ModelSearch.value = alt.id.split('/').pop();
+    } else if (availableModelsP2.length > 0) {
+        gameState.player2Model = availableModelsP2[0].id;
+        player2ModelSearch.value = availableModelsP2[0].id.split('/').pop();
     }
 
     // Populate Player 1 dropdown
-    populateSearchableDropdown(player1ModelOptions, availableModels, 'player1');
+    populateSearchableDropdown(player1ModelOptions, availableModelsP1, 'player1');
     // Populate Player 2 dropdown
-    populateSearchableDropdown(player2ModelOptions, availableModels, 'player2');
+    populateSearchableDropdown(player2ModelOptions, availableModelsP2, 'player2');
+}
+
+// Force-close every model dropdown and drop focus — starting a battle must
+// never leave a selector open over the arena.
+function closeAllModelDropdowns() {
+    document.querySelectorAll('.dropdown-options').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.searchable-dropdown.open').forEach(el => el.classList.remove('open'));
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+    }
 }
 
 // Populate a single searchable dropdown with options
@@ -863,22 +1226,25 @@ function setupSearchableDropdown(searchInput, optionsContainer, playerKey) {
     let isOpen = false;
     let previousValue = '';
 
-    // Also open dropdown when clicked anywhere on the search input wrapper
+    // Clicking the input wrapper toggles (explicit user intent only).
     const inputWrapper = searchInput.closest('.searchable-dropdown-input-wrapper');
     if (inputWrapper) {
         addTrackedEventListener(inputWrapper, 'click', (e) => {
             e.stopPropagation();
-            if (!isOpen) {
+            if (isOpen) {
+                closeDropdown();
+            } else {
+                previousValue = searchInput.value;
                 openDropdown();
             }
             searchInput.focus();
         });
     }
 
-    // Save current value before any user interaction
+    // Focus alone never opens (stray/programmatic focus must not pop a list).
+    // It only snapshots the current value for the outside-click revert below.
     addTrackedEventListener(searchInput, 'focus', () => {
         previousValue = searchInput.value;
-        openDropdown();
     });
 
     // Close dropdown when clicking outside
@@ -894,9 +1260,11 @@ function setupSearchableDropdown(searchInput, optionsContainer, playerKey) {
             return;
         }
 
-        // If the value changed to something not in the dropdown, revert
+        // If the value changed to something not in the dropdown, revert.
+        // Compare against display names (inputs show the short name, not the id).
         if (searchInput.value && searchInput.value !== previousValue) {
-            const modelExists = availableModels.some(m => m.id === searchInput.value);
+            const list = modelsForPlayer(playerKey);
+            const modelExists = list.some(m => m.id === searchInput.value || m.id.split('/').pop() === searchInput.value);
             if (!modelExists) {
                 searchInput.value = previousValue;
             }
@@ -916,13 +1284,20 @@ function setupSearchableDropdown(searchInput, optionsContainer, playerKey) {
     // Handle option selection
     addTrackedEventListener(optionsContainer, 'click', (e) => {
         const option = e.target.closest('.dropdown-option');
-        if (option) {
+        if (option && !option.classList.contains('no-results') && option.dataset.modelId) {
             selectModel(option.dataset.modelId);
         }
     });
 
     function openDropdown() {
         isOpen = true;
+        // One-time trace hook: set localStorage snake-debug-dropdown=1,
+        // reload, reproduce, and the console shows exactly who opened it.
+        try {
+            if (localStorage.getItem('snake-debug-dropdown') === '1') {
+                console.trace(`[dropdown-trace] openDropdown player=${playerKey}`);
+            }
+        } catch (e) { /* private mode: skip */ }
         optionsContainer.classList.remove('hidden');
         if (searchInput.parentElement && searchInput.parentElement.parentElement) {
             searchInput.parentElement.parentElement.classList.add('open');
@@ -950,7 +1325,7 @@ function setupSearchableDropdown(searchInput, optionsContainer, playerKey) {
         }
 
         // If no options and no models loaded, show a message
-        if (options.length === 0 && availableModels.length === 0) {
+        if (options.length === 0 && modelsForPlayer(playerKey).length === 0) {
             if (!optionsContainer.querySelector('.no-results')) {
                 const noModels = document.createElement('div');
                 noModels.className = 'dropdown-option no-results';
@@ -993,7 +1368,7 @@ function setupSearchableDropdown(searchInput, optionsContainer, playerKey) {
     }
 
     function selectModel(modelId) {
-        const displayName = (availableModels.find(m => m.id === modelId)?.id || modelId).split('/').pop();
+        const displayName = (modelsForPlayer(playerKey).find(m => m.id === modelId)?.id || modelId).split('/').pop();
         searchInput.value = displayName;
         previousValue = displayName;
 
@@ -1004,10 +1379,12 @@ function setupSearchableDropdown(searchInput, optionsContainer, playerKey) {
         }
 
         // Repopulate both dropdowns to show updated selections
-        populateSearchableDropdown(player1ModelOptions, availableModels, 'player1');
-        populateSearchableDropdown(player2ModelOptions, availableModels, 'player2');
+        populateSearchableDropdown(player1ModelOptions, availableModelsP1, 'player1');
+        populateSearchableDropdown(player2ModelOptions, availableModelsP2, 'player2');
 
         closeDropdown();
+        // Drop focus so a later focus event can't reopen the list.
+        searchInput.blur();
     }
 }
 
@@ -1077,6 +1454,7 @@ function cleanupGameResources() {
 // Add log entry.
 // - forceLog: always show, even if the game is over (used for winner banners / critical errors).
 // - isInteresting: show even when allLogsEnabled is false (used for key game events: food eaten, collisions, deaths).
+// - errors (⚠️/❌ messages) always show, even in quiet-log mode.
 function addLog(message, playerNum = null, forceLog = false, isInteresting = false) {
     // Stop adding logs once game is over (unless forced for final messages)
     if (gameState.gameOver && !forceLog) {
@@ -1084,8 +1462,10 @@ function addLog(message, playerNum = null, forceLog = false, isInteresting = fal
     }
 
     // In quiet-log mode (allLogs off) we skip routine per-turn/API messages unless
-    // they are marked as interesting game events or are forced (e.g. game-over banner).
-    if (!allLogsEnabled && !forceLog && !isInteresting) {
+    // they are marked as interesting game events, are forced (e.g. game-over banner),
+    // or are errors — errors must always be visible.
+    const isError = typeof message === 'string' && /^[⚠️❌]/.test(message);
+    if (!allLogsEnabled && !forceLog && !isInteresting && !isError) {
         return;
     }
 
@@ -1098,7 +1478,7 @@ function addLog(message, playerNum = null, forceLog = false, isInteresting = fal
     if (playerNum !== null) {
         // Player-specific move number
         const moveNum = playerNum === 1 ? gameState.player1MoveNumber : gameState.player2MoveNumber;
-        const playerColor = playerNum === 1 ? '#FF6B6B' : '#4ECDC4';
+        const playerColor = playerNum === 1 ? '#FF6B6B' : '#6EA8FF';
         const playerName = playerNum === 1 ? 'P1' : 'P2';
 
         // Create main span with player info
@@ -1237,6 +1617,7 @@ function initializeGame() {
     document.getElementById('p2-model-name').textContent = 'Player 2';
     document.getElementById('p1-model-stats').textContent = 'length: 3, moves: 0 ↑0B ↓0B';
     document.getElementById('p2-model-stats').textContent = 'length: 3, moves: 0 ↑0B ↓0B';
+    resetScoreboard();
 
     // Reset latency tracking
     resetLatencyTracking();
@@ -1508,6 +1889,22 @@ function drawLatencyGraph(playerNum, latencies) {
     const canvas = document.getElementById(`p${playerNum}-latency-canvas`);
     if (!canvas) return;
 
+    // Ink colors follow the theme (dark instrument vs light panel).
+    const lightTheme = getCurrentTheme() === 'light';
+    const ink = lightTheme ? {
+        gridH: 'rgba(17, 24, 39, 0.12)',
+        gridV: 'rgba(17, 24, 39, 0.06)',
+        text: 'rgba(17, 24, 39, 0.55)',
+        textStrong: 'rgba(17, 24, 39, 0.75)',
+        dot: '#111827',
+    } : {
+        gridH: 'rgba(255, 255, 255, 0.12)',
+        gridV: 'rgba(255, 255, 255, 0.05)',
+        text: 'rgba(255, 255, 255, 0.6)',
+        textStrong: 'rgba(255, 255, 255, 0.75)',
+        dot: '#ffffff',
+    };
+
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
 
@@ -1555,7 +1952,7 @@ function drawLatencyGraph(playerNum, latencies) {
     };
 
     // Draw background grid (horizontal) - within padded area
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.strokeStyle = ink.gridH;
     ctx.lineWidth = 1;
     for (let i = 0; i < 5; i++) {
         const y = paddingY + (drawHeight / 5) * i;
@@ -1566,7 +1963,7 @@ function drawLatencyGraph(playerNum, latencies) {
     }
 
     // Draw subtle vertical grid lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.strokeStyle = ink.gridV;
     const verticalStep = drawWidth / 10;
     for (let i = 0; i <= 10; i++) {
         const x = paddingX + i * verticalStep;
@@ -1582,7 +1979,7 @@ function drawLatencyGraph(playerNum, latencies) {
 
     if (latencies.length < 2) {
         // Draw "waiting for data" text
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.fillStyle = ink.text;
         ctx.font = 'normal 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1603,8 +2000,8 @@ function drawLatencyGraph(playerNum, latencies) {
     }
 
     // Use solid player-specific color for the line
-    // Player 1 = red, Player 2 = cyan/teal
-    const lineColor = playerNum === 1 ? '#ff6b6b' : '#4ecdc4';
+    // Player 1 = red, Player 2 = blue
+    const lineColor = playerNum === 1 ? '#ff6b6b' : '#4488ff';
 
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 2;
@@ -1618,7 +2015,7 @@ function drawLatencyGraph(playerNum, latencies) {
         const y = latencyToY(latencies[i]);
         ctx.beginPath();
         ctx.arc(x, y, 2, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = ink.dot;
         ctx.fill();
     }
 
@@ -1627,18 +2024,18 @@ function drawLatencyGraph(playerNum, latencies) {
     const lastY = latencyToY(latencies[latencies.length - 1]);
     ctx.beginPath();
     ctx.arc(lastX, lastY, 3.5, 0, Math.PI * 2);
-    ctx.fillStyle = playerNum === 1 ? '#ff9999' : '#7dd3d3';
+    ctx.fillStyle = playerNum === 1 ? '#ff9999' : '#8fb8ff';
     ctx.fill();
 
     // Draw max value label at top
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.fillStyle = ink.textStrong;
     ctx.font = 'normal 500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillText(`${Math.round(scaleMax)}ms`, width - paddingX, paddingY);
 
     // Draw min value label at bottom
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.fillStyle = ink.text;
     ctx.textBaseline = 'bottom';
     ctx.fillText('0ms', width - paddingX, height - paddingY);
 
@@ -1843,7 +2240,7 @@ function handleLatencyGraphMouseMove(e, canvas, playerNum) {
     const tooltipY = e.clientY - 12;
 
     // Show tooltip with player-specific border color
-    const borderColor = playerNum === 1 ? '#ff6b6b' : '#4ecdc4';
+    const borderColor = playerNum === 1 ? '#ff6b6b' : '#4488ff';
     showTooltip(tooltipX, tooltipY, playerNum, index, latency, borderColor);
 
     // Store current hover state for overlay
@@ -1903,7 +2300,7 @@ function redrawGraphWithOverlay(canvas, playerNum, highlightIndex) {
     };
 
     // Get the appropriate color based on player
-    const lineColor = playerNum === 1 ? '#ff6b6b' : '#4ecdc4';
+    const lineColor = playerNum === 1 ? '#ff6b6b' : '#4488ff';
 
     // Create or get overlay canvas
     let overlay = canvas.parentElement.querySelector('.latency-graph-overlay');
@@ -1938,7 +2335,7 @@ function redrawGraphWithOverlay(canvas, playerNum, highlightIndex) {
     ctx.beginPath();
     ctx.moveTo(x, paddingY);
     ctx.lineTo(x, height - paddingY);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.strokeStyle = getCurrentTheme() === 'light' ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.stroke();
@@ -1950,7 +2347,7 @@ function redrawGraphWithOverlay(canvas, playerNum, highlightIndex) {
 
     ctx.beginPath();
     ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.fillStyle = getCurrentTheme() === 'light' ? 'rgba(17, 24, 39, 0.15)' : 'rgba(255, 255, 255, 0.9)';
     ctx.fill();
 
     ctx.beginPath();
@@ -2181,7 +2578,11 @@ async function getLLMDirection(playerNum, maxTokens = null) {
     const startTime = Date.now();
 
     try {
-        const requestBody = {
+        // Credentials up front; the shared builder cleans per provider.
+        const creds = getPlayerCredentials(playerNum);
+        const { url: requestUrl, headers: requestHeaders, body: requestBody } = SnakeCore.buildChatRequest({
+            apiUrl: creds.apiUrl,
+            apiKey: creds.apiKey,
             model: model,
             messages: [
                 {
@@ -2200,17 +2601,9 @@ async function getLLMDirection(playerNum, maxTokens = null) {
                 }
             ],
             temperature: 0,
-            // Toggle model "thinking" mode via the Options UI (e.g. GLM-5.x).
-            // Harmless for models that don't recognize chat_template_kwargs.
-            chat_template_kwargs: {
-                enable_thinking: thinkingModeEnabled
-            }
-        };
-
-        // Conditionally add max_tokens based on the parameter
-        if (maxTokens !== null) {
-            requestBody.max_tokens = maxTokens;
-        }
+            maxTokens: maxTokens,
+            thinkingEnabled: thinkingModeEnabled
+        });
 
         // Calculate request size for logging
         const requestBodyString = JSON.stringify(requestBody);
@@ -2231,7 +2624,7 @@ async function getLLMDirection(playerNum, maxTokens = null) {
 
         if (gameState.debugMode) {
             console.log(`[${formatTimestamp(new Date(startTime))}] ======== P${playerNum}: Move ${playerMove}: Request ${requestNum} (${requestBytes} bytes, ~${requestTokens} tokens) ======`);
-            console.log('URL:', `${gameState.apiUrl}chat/completions`);
+            console.log('URL:', requestUrl);
             console.log('Headers:', {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ***HIDDEN***'
@@ -2249,12 +2642,9 @@ async function getLLMDirection(playerNum, maxTokens = null) {
 
         let response;
         try {
-            response = await fetch(`${gameState.apiUrl}chat/completions`, {
+            response = await fetch(requestUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${gameState.apiKey}`
-                },
+                headers: requestHeaders,
                 body: JSON.stringify(requestBody),
                 signal: abortController.signal,
                 credentials: 'omit'
@@ -2751,12 +3141,13 @@ async function moveSnakeWithLLM(playerNum, abortSignal, timeoutAttempt = 0) {
 
 // Draw the game
 function draw() {
-    // Clear canvas
-    ctx.fillStyle = '#0a0a15';
+    // Clear canvas (theme-aware surface)
+    const boardColors = getBoardThemeColors();
+    ctx.fillStyle = boardColors.bg;
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // Draw grid (subtle)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.strokeStyle = boardColors.grid;
     ctx.lineWidth = 0.5;
     for (let x = 0; x <= GRID_SIZE; x++) {
         ctx.beginPath();
@@ -2780,14 +3171,14 @@ function draw() {
         // Draw fruit based on type
         if (emoji === '🍎') {
             // Apple - simple red circle with leaf
-            ctx.fillStyle = '#FF6B6B';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.beginPath();
             ctx.arc(x, y + 1, CELL_SIZE / 2 - 2, 0, Math.PI * 2);
             ctx.fill();
 
             // Glow
             ctx.shadowBlur = 10;
-            ctx.shadowColor = '#FF6B6B';
+            ctx.shadowColor = getFruitFill(emoji);
             ctx.fill();
             ctx.shadowBlur = 0;
 
@@ -2800,9 +3191,9 @@ function draw() {
 
         } else if (emoji === '💎') {
             // Diamond - sparkling diamond shape
-            ctx.fillStyle = '#00D9FF';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.shadowBlur = 20;
-            ctx.shadowColor = '#00D9FF';
+            ctx.shadowColor = getFruitFill(emoji);
 
             ctx.beginPath();
             ctx.moveTo(x, y - 7);
@@ -2829,9 +3220,9 @@ function draw() {
 
         } else if (emoji === '⭐') {
             // Star - 5-pointed star
-            ctx.fillStyle = '#FFD93D';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.shadowBlur = 15;
-            ctx.shadowColor = '#FFD93D';
+            ctx.shadowColor = getFruitFill(emoji);
 
             const outerRadius = 7;
             const innerRadius = 3;
@@ -2857,9 +3248,9 @@ function draw() {
 
         } else if (emoji === '🍇') {
             // Grapes - cluster of small circles
-            ctx.fillStyle = '#9B5DE5';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.shadowBlur = 12;
-            ctx.shadowColor = '#9B5DE5';
+            ctx.shadowColor = getFruitFill(emoji);
 
             // Main cluster
             const grapePositions = [
@@ -2887,9 +3278,9 @@ function draw() {
 
         } else if (emoji === '🍒') {
             // Cherries - two red circles connected
-            ctx.fillStyle = '#FF4444';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.shadowBlur = 12;
-            ctx.shadowColor = '#FF4444';
+            ctx.shadowColor = getFruitFill(emoji);
 
             // First cherry
             ctx.beginPath();
@@ -2912,9 +3303,9 @@ function draw() {
 
         } else if (emoji === '🦋') {
             // Butterfly - winged shape
-            ctx.fillStyle = '#00F5D4';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.shadowBlur = 15;
-            ctx.shadowColor = '#00F5D4';
+            ctx.shadowColor = getFruitFill(emoji);
 
             // Left wing
             ctx.beginPath();
@@ -2927,7 +3318,7 @@ function draw() {
             ctx.fill();
 
             // Body
-            ctx.fillStyle = '#00A888';
+            ctx.fillStyle = getCurrentTheme() === 'light' ? '#0F766E' : '#00A888';
             ctx.beginPath();
             ctx.ellipse(x, y, 1.5, 6, 0, 0, Math.PI * 2);
             ctx.fill();
@@ -2945,9 +3336,9 @@ function draw() {
 
         } else if (emoji === '🎁') {
             // Present - gift box
-            ctx.fillStyle = '#FF9F1C';
+            ctx.fillStyle = getFruitFill(emoji);
             ctx.shadowBlur = 20;
-            ctx.shadowColor = '#FF9F1C';
+            ctx.shadowColor = getFruitFill(emoji);
 
             // Box
             ctx.fillRect(x - 5, y - 4, 10, 9);
@@ -2974,7 +3365,7 @@ function draw() {
                 { dx: 6, dy: 3 },
             ];
 
-            ctx.fillStyle = '#FFFFFF';
+            ctx.fillStyle = getFruitFill('🎁');
             particles.forEach(p => {
                 const offset = Math.sin(Date.now() / 150 + p.dx + p.dy) * 1;
                 ctx.fillRect(x + p.dx + offset - 1, y + p.dy - 1, 2, 2);
@@ -2994,7 +3385,7 @@ function draw() {
 
     // Draw snakes
     drawSnake(gameState.snake1, '#FF6B6B', '#FF4444'); // Red
-    drawSnake(gameState.snake2, '#4ECDC4', '#44B3AC'); // Blue
+    drawSnake(gameState.snake2, '#4488FF', '#2F6AE0'); // Blue
 
     // Draw game over overlay (only if not dismissed)
     if (gameState.gameOver && !gameState.overlayDismissed) {
@@ -3024,7 +3415,7 @@ function draw() {
                 subtitleText = p1ModelName;
             } else if (gameState.snake2.length > gameState.snake1.length) {
                 winnerText = 'PLAYER 2 WINS!';
-                winnerColor = '#4ECDC4';
+                winnerColor = '#4488FF';
                 subtitleText = p2ModelName;
             } else {
                 winnerText = 'DRAW!';
@@ -3033,7 +3424,7 @@ function draw() {
             }
         } else if (gameState.player1Dead) {
             winnerText = 'PLAYER 2 WINS!';
-            winnerColor = '#4ECDC4';
+            winnerColor = '#4488FF';
             subtitleText = p2ModelName;
         } else if (gameState.player2Dead) {
             winnerText = 'PLAYER 1 WINS!';
@@ -3169,7 +3560,7 @@ function formatBytes(bytes) {
     return SnakeCore.formatBytes(bytes);
 }
 
-// Update score display
+// Update score display (compact stats line + scoreboard strip)
 function updateScores() {
     // Update main stats panel - update only the stats portion with condensed data tracking
     const p1DataDisplay = `↑${formatBytes(gameState.player1DataSent)} ↓${formatBytes(gameState.player1DataReceived)}`;
@@ -3177,17 +3568,31 @@ function updateScores() {
 
     document.getElementById('p1-model-stats').textContent = `length: ${gameState.snake1.length}, moves: ${gameState.player1MoveNumber} ${p1DataDisplay}`;
     document.getElementById('p2-model-stats').textContent = `length: ${gameState.snake2.length}, moves: ${gameState.player2MoveNumber} ${p2DataDisplay}`;
+
+    // Scoreboard strip: big length + compact sub-line
+    if (sbP1Score) sbP1Score.textContent = gameState.snake1.length;
+    if (sbP1Sub) sbP1Sub.textContent = `length ${gameState.snake1.length} · ${gameState.player1MoveNumber} moves`;
+    if (sbP2Score) sbP2Score.textContent = gameState.snake2.length;
+    if (sbP2Sub) sbP2Sub.textContent = `length ${gameState.snake2.length} · ${gameState.player2MoveNumber} moves`;
+}
+
+// Reset scoreboard strip to the initial 3-length state
+function resetScoreboard() {
+    if (sbP1Score) sbP1Score.textContent = '3';
+    if (sbP1Sub) sbP1Sub.textContent = 'length 3 · 0 moves';
+    if (sbP2Score) sbP2Score.textContent = '3';
+    if (sbP2Sub) sbP2Sub.textContent = 'length 3 · 0 moves';
 }
 
 // Toggle pause
 function togglePause() {
+    closeAllModelDropdowns();
     gameState.paused = !gameState.paused;
     // Either entering or leaving pause changes the on-canvas overlay, so
     // request a redraw (the rAF loop is now fully gated on needsRedraw).
     needsRedraw = true;
-    const iconSpan = pauseBtn.querySelector('.btn-icon');
-    if (iconSpan) {
-        iconSpan.textContent = gameState.paused ? '▶️' : '⏸️';
+    if (typeof pauseBtn !== 'undefined' && pauseBtn) {
+        pauseBtn.textContent = gameState.paused ? 'Resume' : 'Pause';
     }
 
     if (gameState.paused) {
@@ -3444,13 +3849,11 @@ function showDebugTooltip() {
 function restartGame() {
     // Clean up game-specific resources
     cleanupGameResources();
+    closeAllModelDropdowns();
 
     logContent.innerHTML = '';
     pauseBtn.disabled = false;
-    const iconSpan = pauseBtn.querySelector('.btn-icon');
-    if (iconSpan) {
-        iconSpan.textContent = '⏸️';
-    }
+    pauseBtn.textContent = 'Pause';
     gameState.debugMode = false;
     debugCheckbox.checked = false;
 
@@ -3522,8 +3925,16 @@ function startGame(fromDemoMode = false) {
         return;
     }
 
-    gameState.apiUrl = normalizeApiUrl(apiUrlInput.value.trim());
-    gameState.apiKey = apiKeyInput.value.trim();
+    syncCredentialsFromInputs();
+
+    if (!gameState.player1ApiUrl) {
+        showError('Please load models first (Provider 1 credentials required)');
+        return;
+    }
+    if (!gameState.sameProvider && !gameState.player2ApiUrl) {
+        showError('Please provide Provider 2 credentials (or check "Use same provider")');
+        return;
+    }
 
     if (!gameState.player1Model || !gameState.player2Model) {
         showError('Please select both player models');
@@ -3533,6 +3944,7 @@ function startGame(fromDemoMode = false) {
     logContent.innerHTML = '';
     initializeGame();
     draw();
+    closeAllModelDropdowns();
 
     // Update player names with model names - AFTER initializeGame
     updatePlayerNamesWithModels();
@@ -3540,6 +3952,7 @@ function startGame(fromDemoMode = false) {
     // Update stats
     document.getElementById('p1-model-stats').textContent = 'length: 3, moves: 0 ↑0B ↓0B';
     document.getElementById('p2-model-stats').textContent = 'length: 3, moves: 0 ↑0B ↓0B';
+    resetScoreboard();
 
     addLog(`🐍 Snake battle: ${gameState.player1Model} vs ${gameState.player2Model}`, null, false, true);
 
@@ -3571,6 +3984,10 @@ window.addEventListener('beforeunload', cleanupResources);
 window.addEventListener('pagehide', cleanupResources);
 
 // Initialize game stats on page load
+initTheme();
+initProviders();
+initProviderPresets();
+updateProviderLabels();
 initializeGame();
 
 // Handle window resize to redraw latency graphs

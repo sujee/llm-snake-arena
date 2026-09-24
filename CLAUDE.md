@@ -14,15 +14,15 @@ This is a snake battle game with AI-controlled opponents powered by LLM APIs. Th
 
 1. **HTML Structure Rules:**
    - Never add or remove `</div>` tags without proper context
-   - Maintain the exact nesting structure: main-container → left-pane/right-pane → game-toolbar → game-layout → game-center-panel/game-right-panel
-   - Both game panels must remain present: canvas (center), game log (right). The fruit legend is a compact `🍎 Legend` button in `.game-toolbar` that opens a fixed popover (no longer a left column).
-   - Canvas and game log panels must maintain matching 600px heights
+   - Maintain the exact nesting structure: `header.topbar` + `.arena-layout` → `.rail` (setup) / `.centercol` (scoreboard + board + latency) / `.logcard` (game log)
+   - All three columns must remain present. The fruit legend is a `🍎` button in `.topbar` that opens a fixed popover; the theme toggle sits beside it.
+   - Preserve every element `id` in `snake.html` — `js/game.js` and `js/benchmark.js` wire by id (provider inputs, model dropdowns, board/latency canvases, log, modal).
 
 2. **CSS Layout Rules:**
-   - Preserve flex layouts and flex properties
+   - Preserve the arena grid (`300px minmax(0,1fr) 320px`) and the viewport-fit shell (`100dvh`, internal column scroll on desktop)
    - Do not change widths that affect layout structure
-   - Maintain responsive breakpoints (currently 600px)
-   - Keep game panel alignment: center (canvas) + right (game log)
+   - Maintain the responsive breakpoint (currently 1100px, single column below)
+   - Board canvas keeps `aspect-ratio: 1` and the `min(100%, 100dvh - 400px)` cap so scoreboard + latency stay on screen
 
 3. **Before Making Changes:**
    - Verify the visual layout is correct before starting any optimization
@@ -31,9 +31,9 @@ This is a snake battle game with AI-controlled opponents powered by LLM APIs. Th
    - Ensure div tags are perfectly balanced (equal opening/closing counts)
 
 4. **After Making Changes:**
-   - Check that the `🍎 Legend` button is visible in the toolbar above the canvas, and its popover opens/closes correctly
-   - Verify canvas takes most space in center (600x600)
-   - Confirm game log matches canvas height on right (600px)
+   - Check that the `🍎 Legend` button is visible in the topbar, and its popover opens/closes correctly
+   - Verify the scoreboard strip sits above the board with the timer centered
+   - Confirm latency graphs render under the board and the log rail scrolls internally
    - Test responsive layout at different screen sizes
 
 ### Security Rules

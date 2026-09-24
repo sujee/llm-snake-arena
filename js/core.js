@@ -204,6 +204,100 @@
         }
     }
 
+    // Dual-provider credentials. Player 1 always uses provider 1. Player 2
+    // uses provider 1 when `sameProvider` is true, otherwise provider 2.
+    // Pure so the resolution rule is unit-testable; DOM reads stay in game.js.
+    function resolvePlayerCredentials(sameProvider, provider1, provider2, playerNum) {
+        const p1 = provider1 || { apiUrl: '', apiKey: '' };
+        const p2 = provider2 || { apiUrl: '', apiKey: '' };
+        const chosen = (playerNum === 2 && !sameProvider) ? p2 : p1;
+        return { apiUrl: chosen.apiUrl || '', apiKey: effectiveApiKey(chosen.apiUrl, chosen.apiKey) };
+    }
+
+    function isLocalBaseUrl(url) {
+        try {
+            const host = new URL(url).hostname.toLowerCase();
+            return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // OpenAI's API rejects unknown body fields like chat_template_kwargs,
+    // so the thinking param must be omitted for OpenAI endpoints.
+    function isOpenAIEndpoint(apiUrl) {
+        try {
+            const host = new URL(apiUrl).hostname.toLowerCase();
+            return host === 'openai.com' || host.endsWith('.openai.com');
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // Browser fetch failures surface as bare TypeErrors ("Failed to fetch"),
+    // which hides the usual cause: the endpoint blocking cross-origin calls.
+    function describeFetchFailure(apiUrl, err) {
+        const detail = (err && err.message) ? ` (${err.message})` : '';
+        if (isOpenAIEndpoint(apiUrl)) {
+            return 'Network error — api.openai.com blocks direct browser requests (CORS). ' +
+                'Route through a local OpenAI-compatible proxy and use the Custom preset.' + detail;
+        }
+        return 'Network error — check connectivity, or the endpoint may block browser requests (CORS).' + detail;
+    }
+
+    // ONE place where chat-completions requests are built and cleaned per
+    // provider. All callers (game moves, benchmarks) go through here so
+    // provider quirks live in exactly one spot:
+    // - OpenAI: no temperature (newer/reasoning models reject non-default
+    //   values, so it is omitted for the whole endpoint), no
+    //   chat_template_kwargs (unknown body fields are rejected), and
+    //   max_completion_tokens instead of max_tokens.
+    // - Local servers ignore auth → empty key becomes the placeholder.
+    function buildChatRequest({ apiUrl, apiKey, model, messages, temperature, maxTokens = null, stream = false, thinkingEnabled = false }) {
+        const url = `${apiUrl}chat/completions`;
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${effectiveApiKey(apiUrl, apiKey)}`
+        };
+        const body = { model, messages };
+        const isOpenAI = isOpenAIEndpoint(apiUrl);
+        if (!isOpenAI) {
+            body.temperature = temperature;
+        }
+        if (maxTokens !== null && maxTokens !== undefined) {
+            body[isOpenAI ? 'max_completion_tokens' : 'max_tokens'] = maxTokens;
+        }
+        if (stream) {
+            body.stream = true;
+        }
+        if (!isOpenAI) {
+            body.chat_template_kwargs = { enable_thinking: !!thinkingEnabled };
+        }
+        return { url, headers, body };
+    }
+
+    // Local servers (Ollama) ignore auth: an empty key becomes a placeholder
+    // so requests still send a well-formed Bearer header.
+    function effectiveApiKey(apiUrl, apiKey) {
+        if (apiKey) return apiKey;
+        return isLocalBaseUrl(apiUrl) ? 'ollama' : '';
+    }
+
+    // Well-known OpenAI-compatible providers. `url: ''` means "no safe
+    // default" (Anthropic's native API is not OpenAI-compatible; Custom is
+    // user-supplied). Key requirement is relaxed for local URLs (see above).
+    function getProviderPresets() {
+        return [
+            { id: 'nebius', label: 'Nebius Token Factory', url: 'https://api.tokenfactory.nebius.com/v1/', note: '' },
+            { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1/', note: '' },
+            { id: 'together', label: 'Together AI', url: 'https://api.together.xyz/v1/', note: '' },
+            { id: 'ollama-cloud', label: 'Ollama Cloud', url: 'https://ollama.com/v1/', note: '' },
+            { id: 'ollama-local', label: 'Ollama Local', url: 'http://localhost:11434/v1/', note: 'Local Ollama needs no API key — leave it blank.' },
+            { id: 'anthropic', label: 'Anthropic', url: '', note: 'Anthropic has no OpenAI-compatible endpoint — point the URL at an OpenAI-compatible proxy.', warn: true },
+            { id: 'custom', label: 'Custom', url: '', note: '' },
+        ];
+    }
+
     const SnakeCore = {
         normalizeApiUrl,
         isValidApiUrl,
@@ -223,6 +317,13 @@
         calculatePercentile,
         calculateLatencyStats,
         formatBytes,
+        resolvePlayerCredentials,
+        isLocalBaseUrl,
+        isOpenAIEndpoint,
+        describeFetchFailure,
+        buildChatRequest,
+        effectiveApiKey,
+        getProviderPresets,
     };
 
     global.SnakeCore = SnakeCore;
