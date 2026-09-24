@@ -119,3 +119,26 @@ test('light theme keeps benchmark modal chrome readable', () => {
         assert.ok(css.includes(`html[data-theme="light"] ${sel}`), `missing light override for ${sel}`);
     }
 });
+
+test('latency graph stays responsive on resize (no frozen inline size)', () => {
+    // Regression guard: drawLatencyGraph used to pin
+    // canvas.style.width/height to measured px values, which froze the canvas
+    // (CSS is width:100%) so window resizes never changed its size again.
+    const game = fs.readFileSync(path.join(root, 'js', 'game.js'), 'utf8');
+    const fnStart = game.indexOf('function drawLatencyGraph');
+    assert.ok(fnStart !== -1, 'missing drawLatencyGraph in js/game.js');
+    const fn = game.slice(fnStart, game.indexOf('// Tooltip styles'));
+    assert.ok(!/canvas\.style\.width\s*=\s*`/.test(fn), 'drawLatencyGraph pins canvas.style.width');
+    assert.ok(!/canvas\.style\.height\s*=\s*`/.test(fn), 'drawLatencyGraph pins canvas.style.height');
+    assert.ok(fn.includes('ctx.setTransform'), 'drawLatencyGraph must reset transform via setTransform');
+});
+
+test('latency resize drops stale hover overlays', () => {
+    const game = fs.readFileSync(path.join(root, 'js', 'game.js'), 'utf8');
+    const fnStart = game.indexOf('function handleResize');
+    assert.ok(fnStart !== -1, 'missing handleResize in js/game.js');
+    const fn = game.slice(fnStart, game.indexOf('// Cleanup on page unload'));
+    assert.ok(fn.includes('.latency-graph-overlay'), 'handleResize must clear stale hover overlays');
+    assert.ok(fn.includes('drawLatencyGraph(1'), 'handleResize must redraw p1 graph');
+    assert.ok(fn.includes('drawLatencyGraph(2'), 'handleResize must redraw p2 graph');
+});

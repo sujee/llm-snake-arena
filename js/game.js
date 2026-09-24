@@ -1970,21 +1970,30 @@ function drawLatencyGraph(playerNum, latencies) {
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
 
-    // Get the displayed size
+    // Get the displayed size (CSS controls display size: .latcard canvas { width: 100% }).
+    // Never write canvas.style.width/height here — pinning inline px sizes would
+    // freeze the canvas and break responsive resizing. Clear any stale inline
+    // size left by older code before measuring so the canvas can follow its
+    // container again without requiring a page reload.
+    if (canvas.style.width || canvas.style.height) {
+        canvas.style.width = '';
+        canvas.style.height = '';
+    }
     const rect = canvas.getBoundingClientRect();
-
-    // Set canvas resolution for crisp text on high-DPI displays
     const width = rect.width;
     const height = rect.height;
+    if (!width || !height) return;
 
-    // Only scale if not already set
-    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-        canvas.width = width * dpr;
-        canvas.height = height * dpr;
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
-        ctx.scale(dpr, dpr);
+    // Set backing-store resolution for crisp text on high-DPI displays.
+    const targetW = Math.max(1, Math.round(width * dpr));
+    const targetH = Math.max(1, Math.round(height * dpr));
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
     }
+    // Reset the transform absolutely on every draw (setting canvas.width resets
+    // the context state, and ctx.scale() would compound across redraws).
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // Add padding to prevent dots from being clipped at edges
     const paddingX = 8;
@@ -2376,11 +2385,14 @@ function redrawGraphWithOverlay(canvas, playerNum, highlightIndex) {
         canvas.parentElement.appendChild(overlay);
     }
 
-    // Scale overlay canvas for high-DPI displays
+    // Scale overlay canvas for high-DPI displays (transient hover layer, so
+    // inline px sizing to the current canvas rect is fine here).
     const dpr = window.devicePixelRatio || 1;
-    if (overlay.width !== width * dpr || overlay.height !== height * dpr) {
-        overlay.width = width * dpr;
-        overlay.height = height * dpr;
+    const overlayW = Math.max(1, Math.round(width * dpr));
+    const overlayH = Math.max(1, Math.round(height * dpr));
+    if (overlay.width !== overlayW || overlay.height !== overlayH) {
+        overlay.width = overlayW;
+        overlay.height = overlayH;
         overlay.style.width = `${width}px`;
         overlay.style.height = `${height}px`;
     }
@@ -4079,6 +4091,9 @@ function startGame(fromDemoMode = false) {
 
 // Handle window resize to redraw latency graphs
 function handleResize() {
+    // Drop stale hover overlays (sized to the pre-resize rect); they are
+    // recreated on the next mousemove.
+    document.querySelectorAll('.latency-graph-overlay').forEach((el) => el.remove());
     // Get visible latency windows
     const p1Latencies = player1GlobalLatencies.slice(-MAX_LATENCY_HISTORY);
     const p2Latencies = player2GlobalLatencies.slice(-MAX_LATENCY_HISTORY);
