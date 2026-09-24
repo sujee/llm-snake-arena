@@ -204,6 +204,39 @@
         }
     }
 
+    // Compact token counts for the latency-panel title (0 -> "0",
+    // 999 -> "999", 1500 -> "1.5k", 2.5M -> "2.5M").
+    function formatTokens(n) {
+        if (!Number.isFinite(n) || n < 0) return '0';
+        const rounded = Math.round(n);
+        if (rounded < 1000) return `${rounded}`;
+        if (rounded < 1000000) {
+            const v = (rounded / 1000).toFixed(1).replace(/\.0$/, '');
+            return `${v}k`;
+        }
+        const v = (rounded / 1000000).toFixed(1).replace(/\.0$/, '');
+        return `${v}M`;
+    }
+
+    // One place that reads token usage off an LLM response body.
+    // OpenAI-compatible: data.usage.{prompt_tokens, completion_tokens}.
+    // Anthropic native: data.usage.{input_tokens, output_tokens}.
+    // Returns { input, output, hasUsage }; missing/non-numeric fields
+    // become 0 and hasUsage is false so callers can fall back to an
+    // estimate instead of silently reporting 0.
+    function extractUsage(data) {
+        if (!data || typeof data !== 'object') return { input: 0, output: 0, hasUsage: false };
+        const usage = data.usage;
+        if (!usage || typeof usage !== 'object') return { input: 0, output: 0, hasUsage: false };
+        const num = (v) => (Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
+        let input = num(usage.input_tokens);
+        let output = num(usage.output_tokens);
+        if (input === null) input = num(usage.prompt_tokens);
+        if (output === null) output = num(usage.completion_tokens);
+        const hasUsage = input !== null || output !== null;
+        return { input: input === null ? 0 : input, output: output === null ? 0 : output, hasUsage };
+    }
+
     // Dual-provider credentials. Player 1 always uses provider 1. Player 2
     // uses provider 1 when `sameProvider` is true, otherwise provider 2.
     // Pure so the resolution rule is unit-testable; DOM reads stay in game.js.
@@ -387,6 +420,8 @@
         calculatePercentile,
         calculateLatencyStats,
         formatBytes,
+        formatTokens,
+        extractUsage,
         resolvePlayerCredentials,
         isLocalBaseUrl,
         isOpenAIEndpoint,

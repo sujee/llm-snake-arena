@@ -125,6 +125,12 @@ let gameState = {
     player1DataReceived: 0,  // Total bytes received from LLM for player 1
     player2DataSent: 0,      // Total bytes sent to LLM for player 2
     player2DataReceived: 0,  // Total bytes received from LLM for player 2
+    // Token usage tracking (real `usage` from the API when present,
+    // ~chars/4 estimate fallback when the provider omits it)
+    player1InputTokens: 0,
+    player1OutputTokens: 0,
+    player2InputTokens: 0,
+    player2OutputTokens: 0,
     // Loop mode
     loopMode: false,
     loopCountdownRemaining: 0,
@@ -1668,6 +1674,10 @@ function initializeGame() {
     gameState.player1DataReceived = 0;
     gameState.player2DataSent = 0;
     gameState.player2DataReceived = 0;
+    gameState.player1InputTokens = 0;
+    gameState.player1OutputTokens = 0;
+    gameState.player2InputTokens = 0;
+    gameState.player2OutputTokens = 0;
     gameState.overlayDismissed = false;
     gameState.winnerLogged = false;
 
@@ -2435,6 +2445,21 @@ function calculateLatencyStats(latencies) {
     return SnakeCore.calculateLatencyStats(latencies);
 }
 
+// Token counter in the latency-card title (right-aligned): cumulative
+// input/output tokens for this player, e.g. "↑12.3k ↓0.4k".
+function formatTokens(n) {
+    return SnakeCore.formatTokens(n);
+}
+
+function updateTokenTitle(playerNum) {
+    const el = document.getElementById(`p${playerNum}-token-count`);
+    if (!el) return;
+    const input = playerNum === 1 ? gameState.player1InputTokens : gameState.player2InputTokens;
+    const output = playerNum === 1 ? gameState.player1OutputTokens : gameState.player2OutputTokens;
+    el.textContent = `↑${formatTokens(input)} ↓${formatTokens(output)}`;
+    el.title = `Input ${Math.round(input)} tok / output ${Math.round(output)} tok (real usage when the provider reports it, else ~chars/4 estimate)`;
+}
+
 // Update the statistics display HTML
 function updateLatencyStatsDisplay(playerNum, stats) {
     const container = document.getElementById(`p${playerNum}-latency-stats`);
@@ -2502,6 +2527,8 @@ function resetLatencyTracking() {
     const initialStats = { min: 0, max: 0, median: 0, p90: 0 };
     updateLatencyStatsDisplay(1, initialStats);
     updateLatencyStatsDisplay(2, initialStats);
+    updateTokenTitle(1);
+    updateTokenTitle(2);
 
     // Clean up overlay canvases to prevent memory leaks
     const c1Container = c1?.parentElement;
@@ -2817,6 +2844,24 @@ async function getLLMDirection(playerNum, maxTokens = null) {
         } else {
             gameState.player2DataReceived += responseLength;
         }
+
+        // Track token usage: real `usage` when the provider reports it,
+        // ~chars/4 estimate fallback (request body + reply text) otherwise.
+        const usage = SnakeCore.extractUsage(data);
+        let inputTokens = usage.input;
+        let outputTokens = usage.output;
+        if (!usage.hasUsage) {
+            inputTokens = Math.ceil(requestBodyString.length / 4);
+            outputTokens = Math.ceil((content || '').length / 4);
+        }
+        if (playerNum === 1) {
+            gameState.player1InputTokens += inputTokens;
+            gameState.player1OutputTokens += outputTokens;
+        } else {
+            gameState.player2InputTokens += inputTokens;
+            gameState.player2OutputTokens += outputTokens;
+        }
+        updateTokenTitle(playerNum);
 
         if (gameState.debugMode) {
             console.log(`[${formatTimestamp(new Date(endTime))}] ====== P${playerNum}: Move ${playerMove}: Response ${requestNum} (length=${responseLength} bytes, latency=${latency} ms) ====`);

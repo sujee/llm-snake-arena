@@ -1965,12 +1965,30 @@ html[data-theme="light"] .benchmark-menu-title {
     position: static;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 6px;
     font-size: 10px;
     letter-spacing: 1.2px;
     color: #8b94a7;
     text-transform: uppercase;
     margin-bottom: 6px;
+}
+
+.latcard .lat-title-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.latcard .token-counter {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.2px;
+    word-spacing: 6px;
+    text-transform: none;
+    color: #aab3c5;
+    white-space: nowrap;
 }
 
 .latcard canvas {
@@ -2293,6 +2311,10 @@ html[data-theme="light"] .preset-note.warn {
 
 html[data-theme="light"] .latency-graph-title {
     color: #6b7280;
+}
+
+html[data-theme="light"] .latcard .token-counter {
+    color: #4b5563;
 }
 
 html[data-theme="light"] .dropdown-option.no-results {

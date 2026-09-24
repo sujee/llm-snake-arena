@@ -268,3 +268,23 @@ test('parseAnthropicText joins text blocks and rejects errors', () => {
     assert.throws(() => Core.parseAnthropicText({ error: { message: 'boom' } }), /boom/);
     assert.throws(() => Core.parseAnthropicText(null), /Invalid response/);
 });
+
+test('extractUsage reads OpenAI + Anthropic shapes', () => {
+    assert.deepEqual(Core.extractUsage({ usage: { prompt_tokens: 120, completion_tokens: 7 } }), { input: 120, output: 7, hasUsage: true });
+    assert.deepEqual(Core.extractUsage({ usage: { input_tokens: 200, output_tokens: 15 } }), { input: 200, output: 15, hasUsage: true });
+    assert.deepEqual(Core.extractUsage({ usage: {} }), { input: 0, output: 0, hasUsage: false });
+    assert.deepEqual(Core.extractUsage({}), { input: 0, output: 0, hasUsage: false });
+    assert.deepEqual(Core.extractUsage(null), { input: 0, output: 0, hasUsage: false });
+    // Partial usage still counts as measured
+    assert.deepEqual(Core.extractUsage({ usage: { prompt_tokens: 50 } }), { input: 50, output: 0, hasUsage: true });
+});
+
+test('formatTokens compacts counts', () => {
+    assert.equal(Core.formatTokens(0), '0');
+    assert.equal(Core.formatTokens(999), '999');
+    assert.equal(Core.formatTokens(1000), '1k');
+    assert.equal(Core.formatTokens(1500), '1.5k');
+    assert.equal(Core.formatTokens(12345), '12.3k');
+    assert.equal(Core.formatTokens(2500000), '2.5M');
+    assert.equal(Core.formatTokens(-5), '0');
+});
