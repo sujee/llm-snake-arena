@@ -247,6 +247,20 @@ function initTheme() {
     }
 }
 
+// Paint the app version (single source: js/version.js) next to the header
+// title. The static "v10" fallback in snake.html covers no-JS loads.
+function applyAppVersion() {
+    const el = document.getElementById('app-version');
+    if (!el) return;
+    try {
+        if (typeof SnakeVersion !== 'undefined' && SnakeVersion.APP_VERSION) {
+            el.textContent = SnakeVersion.displayText
+                ? SnakeVersion.displayText()
+                : `v${SnakeVersion.APP_VERSION}`;
+        }
+    } catch (e) { /* keep static fallback */ }
+}
+
 // One provider's URL+key validation. Local servers (Ollama) may skip the key.
 function validateProviderInput(apiUrl, apiKey, label) {
     if (!apiUrl) {
@@ -2420,12 +2434,12 @@ function updateLatencyStatsDisplay(playerNum, stats) {
     const current = globalLatencies.length > 0 ? globalLatencies[globalLatencies.length - 1] : 0;
     const calls = globalLatencies.length;
 
-    // Format API error display if errors exist: "API calls: number ⚠️ error count"
+    // Format API error display if errors exist: "API: number ⚠️ error count"
     const errorDisplay = apiErrors > 0 ? ` ⚠️ ${apiErrors}` : '';
 
     container.innerHTML = `
         <div class="latency-stat">
-            <label>API calls</label>
+            <label>API</label>
             <value>${calls} ${apiErrors > 0 ? `<span class="api-error-count">⚠️ ${apiErrors}</span>` : ''}</value>
         </div>
         <div class="latency-stat">
@@ -4078,6 +4092,7 @@ window.addEventListener('pagehide', cleanupResources);
 
 // Initialize game stats on page load
 initTheme();
+applyAppVersion();
 initProviders();
 initProviderPresets();
 updateProviderLabels();
