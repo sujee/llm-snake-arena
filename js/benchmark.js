@@ -490,7 +490,7 @@ class ModelBenchmark {
 
     _renderNoResults(message, subMessage = '') {
         const sub = subMessage
-            ? `<p style="font-size: 0.9em; margin-top: 10px;">${subMessage}</p>`
+            ? `<p class="benchmark-no-results-sub">${subMessage}</p>`
             : '';
         return `
             <div class="benchmark-no-results">

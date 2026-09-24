@@ -8,7 +8,7 @@
 
     // Current app version. Bump this when shipping user-visible changes;
     // snake.html cache-busters (?v=) track it so deploys bust stale assets.
-    const APP_VERSION = '5';
+    const APP_VERSION = '6';
 
     function displayText() {
         return `v${APP_VERSION}`;
