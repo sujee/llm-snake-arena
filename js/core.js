@@ -360,7 +360,7 @@
         return [
             { id: 'nebius', label: 'Nebius Token Factory', url: 'https://api.tokenfactory.nebius.com/v1/', note: '' },
             { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1/', note: '' },
-            { id: 'anthropic', label: 'Anthropic (native)', url: 'https://api.anthropic.com/', note: 'Native Anthropic API — key is visible in browser devtools.' },
+            { id: 'anthropic', label: 'Anthropic', url: 'https://api.anthropic.com/', note: 'Native Anthropic API — key is visible in browser devtools.' },
             { id: 'together', label: 'Together AI', url: 'https://api.together.xyz/v1/', note: '' },
             { id: 'ollama-cloud', label: 'Ollama Cloud', url: 'https://ollama.com/v1/', note: '' },
             { id: 'ollama-local', label: 'Ollama Local', url: 'http://localhost:11434/v1/', note: 'Local Ollama needs no API key — leave it blank.' },

@@ -205,6 +205,7 @@ test('getProviderPresets lists known providers with URLs', () => {
     assert.equal(byId['together'].url, 'https://api.together.xyz/v1/');
     assert.equal(byId['ollama-local'].url, 'http://localhost:11434/v1/');
     assert.equal(byId['anthropic'].url, 'https://api.anthropic.com/');
+    assert.equal(byId['anthropic'].label, 'Anthropic');
     assert.equal(byId['custom'].url, '');
     assert.equal(byId['openai'].url, 'https://api.openai.com/v1/');
 });

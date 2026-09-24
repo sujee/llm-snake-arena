@@ -4,11 +4,11 @@ const assert = require('node:assert/strict');
 const SnakeVersion = require('../js/version.js');
 
 test('APP_VERSION is the current release', () => {
-    assert.equal(SnakeVersion.APP_VERSION, '4');
+    assert.equal(SnakeVersion.APP_VERSION, '5');
 });
 
 test('displayText renders the header label', () => {
-    assert.equal(SnakeVersion.displayText(), 'v4');
+    assert.equal(SnakeVersion.displayText(), 'v5');
 });
 
 test('exposes a browser global', () => {
