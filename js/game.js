@@ -616,84 +616,29 @@ if (fruitLegendBtn) {
     });
 }
 
-// Normalize API URL - ensure trailing slash
+// Normalize API URL - ensure trailing slash (impl: js/core.js)
 function normalizeApiUrl(url) {
-    if (!url) return '';
-    return url.endsWith('/') ? url : url + '/';
+    return SnakeCore.normalizeApiUrl(url);
 }
 
-// Validate API URL format
+// Validate API URL format (impl: js/core.js)
 function isValidApiUrl(url) {
-    try {
-        // Check if it's a valid HTTPS URL
-        const parsedUrl = new URL(url);
-        return parsedUrl.protocol === 'https:' || parsedUrl.protocol === 'http:';
-    } catch (e) {
-        return false;
-    }
+    return SnakeCore.isValidApiUrl(url);
 }
 
-// Validate API key format
+// Validate API key format (impl: js/core.js)
 function isValidApiKey(apiKey) {
-    if (!apiKey || apiKey.length < 10) {
-        return false;
-    }
-    // Check for reasonable character set (letters, numbers, symbols)
-    const apiKeyRegex = /^[A-Za-z0-9\-_\.]+$/;
-    return apiKeyRegex.test(apiKey);
+    return SnakeCore.isValidApiKey(apiKey);
 }
 
-// Filter models to text-to-text only
+// Filter models to text-to-text only (impl: js/core.js)
 function filterTextModels(models) {
-    console.log(`🎯 Filtering ${models.length} models to text-to-text only...`);
-
-    const filtered = models.filter(model => {
-        // Priority 1: Check architecture.modality (Nebius and similar APIs)
-        if (model.architecture && model.architecture.modality) {
-            // Include any model whose OUTPUT modality is text (e.g. "text->text",
-            // "text+image->text"). Vision-capable LLMs still output text and are
-            // usable for this game. Exclude pure image/audio generation
-            // (e.g. "text->image", "->audio", "text->audio").
-            // NOTE: do NOT require exact "text->text" — that wrongly drops
-            // vision text LLMs like moonshotai/Kimi-K2.6 ("text+image->text").
-            return /->\s*text\b/.test(model.architecture.modality);
-        }
-
-        // Priority 2: Check capabilities.modalities (OpenAI style)
-        if (model.capabilities && model.capabilities.modalities) {
-            const modalities = model.capabilities.modalities;
-            // Keep if it can produce text output. Multimodal inputs
-            // (image/vision) are fine — the game only needs text back.
-            return modalities.includes('text');
-        }
-
-        // Priority 3: Fallback to pattern matching (only filter OUT known non-text)
-        return !isNonTextModel(model.id);
-    });
-
-    console.log(`✅ Filtered to ${filtered.length} text-to-text models`);
-    return filtered;
+    return SnakeCore.filterTextModels(models);
 }
 
-// Check if a model is clearly NOT a text-to-text model
+// Check if a model is clearly NOT a text-to-text model (impl: js/core.js)
 function isNonTextModel(modelId) {
-    const id = (modelId || '').toLowerCase();
-
-    // Only filter out clearly non-text model types
-    const nonTextPatterns = [
-        'whisper',        // Audio transcription
-        'tts',            // Text-to-speech (but must be standalone, not part of other names)
-        'stt',            // Speech-to-text (standalone)
-        'audio',          // Audio models
-        'image',          // Image generation
-        'vision',         // Vision models
-        'speech',         // Speech models
-        'dall-e',         // OpenAI image generation
-        'stable-diffusion', // Stable Diffusion
-        'midjourney',     // Midjourney
-    ];
-
-    return nonTextPatterns.some(pattern => id.includes(pattern));
+    return SnakeCore.isNonTextModel(modelId);
 }
 
 // Load models from API
@@ -1346,42 +1291,19 @@ function removeFruit(x, y) {
     return null;
 }
 
-// Wrap position to stay within grid (wall wrap)
+// Wrap position to stay within grid (impl: js/core.js)
 function wrapPosition(x, y) {
-    return {
-        x: ((x % GRID_SIZE) + GRID_SIZE) % GRID_SIZE,
-        y: ((y % GRID_SIZE) + GRID_SIZE) % GRID_SIZE
-    };
+    return SnakeCore.wrapPosition(x, y, GRID_SIZE);
 }
 
-// Toroidal (wrap-aware) Manhattan distance between two grid points.
-// Consistent with the wrapped board view: a fruit just past a wall is
-// reported as close, not far away.
+// Toroidal (wrap-aware) Manhattan distance (impl: js/core.js)
 function toroidalDist(ax, ay, bx, by) {
-    const dx = Math.abs(ax - bx);
-    const dy = Math.abs(ay - by);
-    return Math.min(dx, GRID_SIZE - dx) + Math.min(dy, GRID_SIZE - dy);
+    return SnakeCore.toroidalDist(ax, ay, bx, by, GRID_SIZE);
 }
 
-// Wrap-aware compass hint from head to target (toroidal shortest path per axis),
-// e.g. " (3 right)" or " (8 right, 1 down)" — dominant axis first. Factual
-// navigation info, not a target recommendation: small LLMs fail the
-// coordinates→direction mapping (especially across the wrap) and wander without it.
+// Wrap-aware compass hint (impl: js/core.js)
 function wrapBearing(head, target) {
-    const parts = [];
-    for (const [raw, neg, pos] of [
-        [target.x - head.x, 'left', 'right'],
-        [target.y - head.y, 'up', 'down'],
-    ]) {
-        const abs = Math.abs(raw);
-        if (abs === 0) continue;
-        const mag = Math.min(abs, GRID_SIZE - abs);
-        // Direct way shorter → follow raw's sign; wrap way shorter → flip it.
-        const dirName = (abs <= GRID_SIZE - abs ? raw > 0 : raw < 0) ? pos : neg;
-        parts.push({ mag, label: `${mag} ${dirName}` });
-    }
-    parts.sort((a, b) => b.mag - a.mag);
-    return parts.length ? ` (${parts.map(p => p.label).join(', ')})` : '';
+    return SnakeCore.wrapBearing(head, target, GRID_SIZE);
 }
 
 // Get game board state as text for LLM
@@ -2037,21 +1959,9 @@ function redrawGraphWithOverlay(canvas, playerNum, highlightIndex) {
     ctx.fill();
 }
 
-// Calculate statistics from latency array
+// Calculate statistics from latency array (impl: js/core.js)
 function calculateLatencyStats(latencies) {
-    const sorted = [...latencies].sort((a, b) => a - b);
-    const len = sorted.length;
-
-    if (len === 0) {
-        return { min: 0, max: 0, median: 0, p90: 0 };
-    }
-
-    const min = sorted[0];
-    const max = sorted[len - 1];
-    const median = calculatePercentile(sorted, 50);
-    const p90 = calculatePercentile(sorted, 90);
-
-    return { min, max, median, p90 };
+    return SnakeCore.calculateLatencyStats(latencies);
 }
 
 // Update the statistics display HTML
@@ -2097,16 +2007,7 @@ function updateLatencyStatsDisplay(playerNum, stats) {
 }
 
 function calculatePercentile(sortedArray, percentile) {
-    const index = (percentile / 100) * (sortedArray.length - 1);
-    const lower = Math.floor(index);
-    const upper = Math.ceil(index);
-    const weight = index - lower;
-
-    if (upper >= sortedArray.length) {
-        return sortedArray[sortedArray.length - 1];
-    }
-
-    return sortedArray[lower] * (1 - weight) + sortedArray[upper] * weight;
+    return SnakeCore.calculatePercentile(sortedArray, percentile);
 }
 
 // Reset latency tracking
@@ -2390,9 +2291,8 @@ async function getLLMDirection(playerNum, maxTokens = null) {
         const choice = content.toLowerCase();
 
         // Extract the first direction word, tolerating punctuation/chattiness
-        // ("down.", "\"Up\"", "I'll go left"). An exact-match requirement meant
-        // any extra text yielded NO direction, silently freezing the snake's loop.
-        const directionWord = choice.match(/\b(up|down|left|right)\b/)?.[1];
+        // ("down.", "\"Up\"", "I'll go left"). See SnakeCore.parseDirectionReply.
+        const directionWord = SnakeCore.parseDirectionReply(choice);
 
         // Check if content is null
         const isNullContent = !data.choices || !data.choices[0] || !data.choices[0].message || data.choices[0].message.content === null;
@@ -2480,90 +2380,34 @@ function moveSnake(snake, direction) {
     return newHead;
 }
 
-// Check collision (walls don't kill)
+// Check collision (impl: js/core.js)
 function checkCollision(snake, head, otherSnake) {
-    // Self collision
-    for (let i = 1; i < snake.length; i++) {
-        if (head.x === snake[i].x && head.y === snake[i].y) {
-            return 'self';
-        }
-    }
-
-    // Enemy collision
-    for (const segment of otherSnake) {
-        if (head.x === segment.x && head.y === segment.y) {
-            return 'enemy';
-        }
-    }
-
-    return null;
+    return SnakeCore.checkCollision(snake, head, otherSnake);
 }
 
-// Check if head-to-head collision
+// Check if head-to-head collision (impl: js/core.js)
 function checkHeadToHead(head1, head2) {
-    return head1.x === head2.x && head1.y === head2.y;
+    return SnakeCore.checkHeadToHead(head1, head2);
 }
 
-// Check if a position would collide with a snake (including its head)
+// Check if a position would collide with a snake (impl: js/core.js)
 function wouldCollideWithSnake(position, snake) {
-    for (const segment of snake) {
-        if (position.x === segment.x && position.y === segment.y) {
-            return true;
-        }
-    }
-    return false;
+    return SnakeCore.wouldCollideWithSnake(position, snake);
 }
 
-// Calculate new head position without moving the snake
+// Calculate new head position without moving the snake (impl: js/core.js)
 function calculateNewHead(head, direction) {
-    return wrapPosition(head.x + direction.x, head.y + direction.y);
+    return SnakeCore.calculateNewHead(head, direction, GRID_SIZE);
 }
 
-// Find a safe direction, preferring the LLM-chosen direction if safe
-// Checks for collisions with both self and enemy snakes
+// Find a safe direction (impl: js/core.js)
 function findSafeDirection(head, preferredDirection, snake, otherSnake) {
-    // Directions: up, right, down, left
-    const directions = [
-        {x: 0, y: -1}, // up
-        {x: 1, y: 0},  // right
-        {x: 0, y: 1},  // down
-        {x: -1, y: 0}  // left
-    ];
-
-    // Try preferred direction first
-    let newPosition = calculateNewHead(head, preferredDirection);
-    if (!wouldCollideWithSnakeBody(newPosition, snake) &&
-        !wouldCollideWithSnake(newPosition, otherSnake)) {
-        return preferredDirection;
-    }
-
-    // Try other directions
-    for (const dir of directions) {
-        // Skip the preferred direction as we already tried it
-        if (dir.x === preferredDirection.x && dir.y === preferredDirection.y) {
-            continue;
-        }
-
-        newPosition = calculateNewHead(head, dir);
-        if (!wouldCollideWithSnakeBody(newPosition, snake) &&
-            !wouldCollideWithSnake(newPosition, otherSnake)) {
-            return dir;
-        }
-    }
-
-    // No safe direction found, return preferred (will likely result in collision)
-    return preferredDirection;
+    return SnakeCore.findSafeDirection(head, preferredDirection, snake, otherSnake, GRID_SIZE);
 }
 
-// Check if a position would collide with a snake body (excluding head)
+// Check if a position would collide with a snake body (impl: js/core.js)
 function wouldCollideWithSnakeBody(position, snake) {
-    // Start from index 1 to exclude head (head moves away, so it's not an obstacle)
-    for (let i = 1; i < snake.length; i++) {
-        if (position.x === snake[i].x && position.y === snake[i].y) {
-            return true;
-        }
-    }
-    return false;
+    return SnakeCore.wouldCollideWithSnakeBody(position, snake);
 }
 
 // Move a single snake
@@ -3320,15 +3164,9 @@ function drawSnake(snake, bodyColor, headColor) {
     });
 }
 
-// Format bytes to compact notation
+// Format bytes to compact notation (impl: js/core.js)
 function formatBytes(bytes) {
-    if (bytes < 1024) {
-        return `${bytes}B`;
-    } else if (bytes < 1024 * 1024) {
-        return `${(bytes / 1024).toFixed(1)}KB`;
-    } else {
-        return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-    }
+    return SnakeCore.formatBytes(bytes);
 }
 
 // Update score display

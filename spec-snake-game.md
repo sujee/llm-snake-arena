@@ -17,8 +17,10 @@ snake-battle/
 │   └── style.css     # All styling and animations
 ├── js/
 │   ├── game.js       # Game logic, rendering, LLM + latency integration
+│   ├── core.js       # DOM-free pure logic (tested, no browser APIs)
 │   └── benchmark.js  # Model performance testing system
-├── test/             # Tests
+├── test/
+│   └── core.test.js  # `node --test test/` — 15 tests, zero deps
 ├── README.md         # User documentation
 ├── CLAUDE.md         # Development guidelines for AI assistants
 └── spec-snake-game.md # This file
