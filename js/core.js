@@ -319,6 +319,16 @@
     // endpoint blocks cross-origin requests.
     const ANTHROPIC_API_VERSION = '2023-06-01';
 
+    // Anthropic requires max_tokens on every request, unlike the
+    // OpenAI-compatible providers where the game omits it (GAME_MAX_TOKENS =
+    // null) so reasoning models finish naturally. When no explicit cap is
+    // supplied we fall back to this generous value: it is a ceiling, not a
+    // target (the model stops on its own), but 300 was too small once the
+    // model emits any thinking/reasoning tokens — those count against
+    // max_tokens, so a low cap produced `stop_reason: 'max_tokens'` with empty
+    // text and the game logged "Limited API response".
+    const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
+
     function isAnthropicEndpoint(apiUrl) {
         try {
             const host = new URL(apiUrl).hostname.toLowerCase();
@@ -348,9 +358,9 @@
             'anthropic-dangerous-direct-browser-access': 'true'
         };
         // max_tokens is required by Anthropic; the game's cascade ends with
-        // null (omit for OpenAI), so substitute a small safe default.
+        // null (omit for OpenAI), so substitute the shared default.
         // temperature is intentionally never sent (Anthropic default).
-        const body = { model, max_tokens: (maxTokens === null || maxTokens === undefined) ? 300 : maxTokens };
+        const body = { model, max_tokens: (maxTokens === null || maxTokens === undefined) ? ANTHROPIC_DEFAULT_MAX_TOKENS : maxTokens };
         if (system) body.system = system;
         if (messages) body.messages = messages;
         if (stream) body.stream = true;
@@ -504,6 +514,7 @@
         getAnthropicModelsRequest,
         parseAnthropicText,
         ANTHROPIC_API_VERSION,
+        ANTHROPIC_DEFAULT_MAX_TOKENS,
         describeFetchFailure,
         buildChatRequest,
         effectiveApiKey,

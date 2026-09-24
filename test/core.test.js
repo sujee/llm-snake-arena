@@ -315,7 +315,10 @@ test('buildAnthropicRequest uses native shape with required max_tokens', () => {
         messages: [{ role: 'user', content: 'hi' }], maxTokens: null
     });
     assert.equal(def.url, 'https://api.anthropic.com/v1/messages');
-    assert.equal(def.body.max_tokens, 300);
+    // Default must be large enough to fit thinking/reasoning tokens plus the
+    // one-word answer; 300 truncated opus-5.5 (stop_reason 'max_tokens').
+    assert.equal(def.body.max_tokens, Core.ANTHROPIC_DEFAULT_MAX_TOKENS);
+    assert.ok(def.body.max_tokens >= 4096);
     const streamed = Core.buildAnthropicRequest({
         apiUrl: 'https://api.anthropic.com/', apiKey: 'k', model: 'm',
         messages: [{ role: 'user', content: 'hi' }], stream: true

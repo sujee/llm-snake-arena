@@ -2722,7 +2722,7 @@ async function getLLMDirection(playerNum, maxTokens = GAME_MAX_TOKENS) {
             });
             // Print metadata + prompts human-readably (real newlines; the raw
             // JSON Body dump escaped every \n and made prompts unreadable).
-            console.log(`Model: ${model} | temp: 0 | max_tokens: ${maxTokens === null ? (isAnthropic ? '300 (anthropic default)' : 'omitted') : maxTokens} | thinking: ${thinkingModeEnabled}`);
+            console.log(`Model: ${model} | temp: 0 | max_tokens: ${maxTokens === null ? (isAnthropic ? `${SnakeCore.ANTHROPIC_DEFAULT_MAX_TOKENS} (anthropic default)` : 'omitted') : maxTokens} | thinking: ${thinkingModeEnabled}`);
             console.log('--- System prompt ---');
             console.log(isAnthropic ? (requestBody.system || '') : requestBody.messages[0].content);
             console.log('--- User prompt ---');

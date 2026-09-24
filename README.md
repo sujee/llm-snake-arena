@@ -165,6 +165,10 @@ And a sample prompt for an agent
 Trace a model loading call for provider OpenAI. Use the API key from the .env file
 ```
 
+```
+Debug why provider/model is running out of tokens
+```
+
 
 
 **"Failed to load models" error:**
